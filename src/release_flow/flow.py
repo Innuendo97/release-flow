@@ -5,6 +5,7 @@ from typing import Literal
 
 from release_flow.exceptions import FlowError, UserAbortError
 from release_flow.git_repo import GitRepo
+from release_flow.gitlab_client import GitLabClient, MergeRequest
 from release_flow.prompts import Prompter
 from release_flow.states import RepoSnapshot
 from release_flow.version_bump import BumpType, strip_snapshot
@@ -148,3 +149,39 @@ def execute_phase_frozen_local(
         if not confirmed:
             raise UserAbortError("user declined push")
     git.push("origin", release_branch, set_upstream=True)
+
+
+def execute_phase_frozen_pushed(
+    gitlab: GitLabClient,
+    project_path: str,
+    release_branch: str,
+    master_branch: str,
+    release_version: str,
+    prompter: Prompter,
+    mr_title_template: str,
+    mr_body_template: str,
+    confirm_before_mr: bool,
+) -> MergeRequest:
+    """Phase 3 → 4: create MR release_branch → master. Idempotent."""
+    # Idempotency: if MR already exists, return it
+    existing = gitlab.list_open_mrs(project_path, source_branch=release_branch)
+    target_match = [mr for mr in existing if mr.target_branch == master_branch]
+    if target_match:
+        return target_match[0]
+
+    suggested_title = mr_title_template.format(version=release_version)
+    title = prompter.ask("Titolo MR", default=suggested_title)
+    initial_body = mr_body_template.format(version=release_version)
+    body = prompter.edit_text(initial=initial_body)
+    if confirm_before_mr:
+        confirmed = prompter.confirm("Creo MR?", default=True)
+        if not confirmed:
+            raise UserAbortError("user declined MR creation")
+
+    return gitlab.create_mr(
+        project_path=project_path,
+        source_branch=release_branch,
+        target_branch=master_branch,
+        title=title,
+        description=body,
+    )

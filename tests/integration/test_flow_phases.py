@@ -1,13 +1,16 @@
 from pathlib import Path
 
 import pytest
+import responses
 
 from release_flow.flow import (
     execute_phase_clean,
     execute_phase_frozen_local,
+    execute_phase_frozen_pushed,
     execute_phase_release_branch_created,
 )
 from release_flow.git_repo import GitRepo
+from release_flow.gitlab_client import GitLabClient
 from release_flow.prompts import ScriptedPrompter
 from release_flow.version_bump import BumpType
 from release_flow.version_io import (
@@ -141,3 +144,52 @@ class TestExecutePhaseFrozenLocal:
         )
         # branch is pushed
         assert "origin/release/release-1.0.0" in gr.remote_branches()
+
+
+@pytest.mark.integration
+class TestExecutePhaseFrozenPushed:
+    @responses.activate
+    def test_creates_mr(self, tmp_repo_with_origin):
+        # Mock project lookup (python-gitlab needs this first)
+        responses.get(
+            "https://gitlab.example/api/v4/projects/org%2Frepo",
+            json={"id": 1, "path": "repo"},
+            status=200,
+        )
+        # Mock list MRs (returns empty — no existing)
+        responses.get(
+            "https://gitlab.example/api/v4/projects/1/merge_requests",
+            json=[],
+            status=200,
+        )
+        # Mock create MR
+        responses.post(
+            "https://gitlab.example/api/v4/projects/1/merge_requests",
+            json={
+                "iid": 142,
+                "title": "Release 1.0.0",
+                "source_branch": "release/release-1.0.0",
+                "target_branch": "master",
+                "state": "opened",
+                "web_url": "https://gitlab.example/org/repo/-/merge_requests/142",
+                "author": {"username": "me"},
+            },
+            status=201,
+        )
+        client = GitLabClient(base_url="https://gitlab.example", token="glpat-x")
+        prompter = ScriptedPrompter()
+        prompter.queue(["Release 1.0.0", "yes"])  # title default, confirm
+        prompter.queue_edit("## Release notes\nbody here\n")
+
+        mr = execute_phase_frozen_pushed(
+            gitlab=client,
+            project_path="org/repo",
+            release_branch="release/release-1.0.0",
+            master_branch="master",
+            release_version="1.0.0",
+            prompter=prompter,
+            mr_title_template="Release {version}",
+            mr_body_template="## Release {version}\n",
+            confirm_before_mr=True,
+        )
+        assert mr.iid == 142
