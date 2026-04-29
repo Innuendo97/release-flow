@@ -4,9 +4,18 @@ from pathlib import Path
 
 import pytest
 
-from release_flow.exceptions import UserAbortError
+from release_flow.exceptions import RecoveryError, UserAbortError
 from release_flow.prompts import ScriptedPrompter
-from release_flow.recovery import RecoveryAction, detect_recovery_needed, recover_caso_a
+from release_flow.recovery import (
+    RecoveryAction,
+    detect_recovery_needed,
+    recover_caso_a,
+    recover_caso_b,
+    recover_caso_c,
+    recover_caso_d,
+    recover_caso_e,
+    recover_caso_f,
+)
 from release_flow.states import RepoSnapshot
 
 
@@ -58,3 +67,61 @@ class TestRecoverCasoA:
         prompter.queue(["1.0.1-SNAPSHOT", "no"])
         with pytest.raises(UserAbortError):
             recover_caso_a(s, prompter, default_bump="patch")
+
+
+class TestRecoverCasoB:
+    def test_chooses_primary_version(self):
+        s = _snapshot(secondary_versions_consistent=False)
+        prompter = ScriptedPrompter()
+        prompter.queue(["1.1.27", "yes"])  # choose 1.1.27 as authoritative
+        choice = recover_caso_b(
+            s,
+            prompter,
+            primary_version="1.1.27",
+            divergent_versions=["1.1.26"],
+        )
+        assert choice.authoritative_version == "1.1.27"
+
+
+class TestRecoverCasoC:
+    def test_my_branch_resumes(self):
+        prompter = ScriptedPrompter()
+        prompter.queue(["yes"])  # confirm resume
+        action = recover_caso_c(prompter, branch_author="me", current_user="me")
+        assert action == "resume"
+
+    def test_foreign_branch_stops(self):
+        prompter = ScriptedPrompter()
+        # No prompt needed — automatic stop
+        action = recover_caso_c(prompter, branch_author="marco.rossi", current_user="me")
+        assert action == "stop"
+
+
+class TestRecoverCasoD:
+    def test_mr_open_continues(self):
+        prompter = ScriptedPrompter()
+        prompter.queue(["yes"])
+        action = recover_caso_d(prompter, mr_iid=142, mr_url="https://x")
+        assert action == "continue_to_bump"
+
+
+class TestRecoverCasoE:
+    def test_pull_ff_only_proposed(self):
+        prompter = ScriptedPrompter()
+        prompter.queue(["yes"])
+        action = recover_caso_e(prompter, behind_count=3)
+        assert action == "pull_ff_only"
+
+    def test_user_declines(self):
+        prompter = ScriptedPrompter()
+        prompter.queue(["no"])
+        with pytest.raises(UserAbortError):
+            recover_caso_e(prompter, behind_count=3)
+
+
+class TestRecoverCasoF:
+    def test_always_stops(self):
+        # Caso F is unconditional STOP — merge in progress
+        with pytest.raises(RecoveryError) as exc:
+            recover_caso_f()
+        assert "merge" in str(exc.value).lower()
