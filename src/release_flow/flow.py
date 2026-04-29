@@ -185,3 +185,9 @@ def execute_phase_frozen_pushed(
         title=title,
         description=body,
     )
+
+
+def execute_phase_mr_master_open(git: GitRepo, develop_branch: str) -> None:
+    """Phase 4 → 5: switch to develop. The MR for master remains open
+    awaiting client approval — does NOT block the bump-back."""
+    git.checkout(develop_branch)

@@ -7,6 +7,7 @@ from release_flow.flow import (
     execute_phase_clean,
     execute_phase_frozen_local,
     execute_phase_frozen_pushed,
+    execute_phase_mr_master_open,
     execute_phase_release_branch_created,
 )
 from release_flow.git_repo import GitRepo
@@ -193,3 +194,12 @@ class TestExecutePhaseFrozenPushed:
             confirm_before_mr=True,
         )
         assert mr.iid == 142
+
+
+@pytest.mark.integration
+class TestExecutePhaseMrMasterOpen:
+    def test_switches_to_develop(self, tmp_repo_with_origin):
+        gr = GitRepo(tmp_repo_with_origin)
+        gr.create_branch("release/release-1.0.0")
+        execute_phase_mr_master_open(git=gr, develop_branch="develop")
+        assert gr.current_branch() == "develop"
