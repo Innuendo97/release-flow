@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from release_flow.exceptions import VersionParseError
+from release_flow.exceptions import VersionMismatchError, VersionParseError
 
 # Built-in patterns. Each entry: file glob → (primary_pattern, secondary_patterns).
 # `primary_pattern` matches the AUTHORITATIVE version; `secondary_patterns` are
@@ -120,3 +120,62 @@ PACKAGE_JSON_PATTERN = r'^\s{0,4}"version":\s*"(?P<v>[^"]+)"'
 
 # Go: const Version = "..."
 GO_CONST_PATTERN = r'(?:const\s+)?Version\s*=\s*"(?P<v>[^"]+)"'
+
+
+@dataclass(frozen=True)
+class FileSpec:
+    """Pointer to a file + the patterns to scan for the version inside it."""
+
+    path: Path
+    patterns: list[str]
+
+
+def read_all_versions(
+    primary: FileSpec, secondaries: list[FileSpec]
+) -> tuple[str, list[VersionMatch]]:
+    """Read primary version + all matches in secondaries."""
+    # Special handling for pom.xml: use read_pom_version to avoid parent version
+    if primary.path.name == "pom.xml":
+        primary_v = read_pom_version(primary.path)
+    else:
+        primary_matches = find_version_occurrences(primary.path, primary.patterns)
+        if not primary_matches:
+            raise VersionParseError(f"no version match in primary {primary.path}")
+        primary_v = primary_matches[0].matched_version
+
+    secondary_matches: list[VersionMatch] = []
+    for sec in secondaries:
+        secondary_matches.extend(find_version_occurrences(sec.path, sec.patterns))
+    return primary_v, secondary_matches
+
+
+def verify_versions_consistent(
+    primary: FileSpec, secondaries: list[FileSpec]
+) -> None:
+    """Raise VersionMismatchError if any secondary disagrees with primary."""
+    primary_v, secondary_matches = read_all_versions(primary, secondaries)
+    bad = [m for m in secondary_matches if m.matched_version != primary_v]
+    if bad:
+        details = "\n".join(
+            f"  {m.file}:{m.line}  {m.matched_version}" for m in bad
+        )
+        raise VersionMismatchError(
+            f"primary version is {primary_v!r}, but secondary files diverge:\n{details}"
+        )
+
+
+def replace_version_in_files(
+    primary: FileSpec,
+    secondaries: list[FileSpec],
+    old_version: str,
+    new_version: str,
+) -> int:
+    """Replace old → new in every match across primary + secondaries.
+
+    Returns total number of replacements done.
+    """
+    total = 0
+    for spec in [primary, *secondaries]:
+        for pat in spec.patterns:
+            total += write_version_in_file(spec.path, old_version, new_version, pat)
+    return total

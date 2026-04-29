@@ -1,7 +1,17 @@
 import pytest
 
-from release_flow.exceptions import VersionParseError
-from release_flow.version_io import read_pom_version, write_version_in_file
+from release_flow.exceptions import VersionMismatchError, VersionParseError
+from release_flow.version_io import (
+    CHART_SECONDARY_PATTERNS,
+    PIPELINE_SECONDARY_PATTERN,
+    POM_PRIMARY_PATTERN,
+    FileSpec,
+    read_all_versions,
+    read_pom_version,
+    replace_version_in_files,
+    verify_versions_consistent,
+    write_version_in_file,
+)
 
 POM_CONTENT = """<?xml version="1.0" encoding="UTF-8"?>
 <project>
@@ -164,3 +174,71 @@ class TestGoConst:
         matches = find_version_occurrences(p, [GO_CONST_PATTERN])
         assert len(matches) == 1
         assert matches[0].matched_version == "1.1.27-SNAPSHOT"
+
+
+def _make_repo(tmp_path, pom_v, chart_v_appv, chart_v, pipeline_v):
+    (tmp_path / "pom.xml").write_text(
+        POM_CONTENT.replace("1.1.27-SNAPSHOT", pom_v), encoding="utf-8"
+    )
+    chart_dir = tmp_path / "chart"
+    chart_dir.mkdir()
+    (chart_dir / "Chart.yaml").write_text(
+        CHART_CONTENT
+        .replace("appVersion: 1.1.27-SNAPSHOT", f"appVersion: {chart_v_appv}")
+        .replace("version: 1.1.27-SNAPSHOT", f"version: {chart_v}"),
+        encoding="utf-8",
+    )
+    (tmp_path / "pipeline.yaml").write_text(
+        PIPELINE_CONTENT.replace("1.1.27-SNAPSHOT", pipeline_v), encoding="utf-8"
+    )
+
+
+class TestReadAllVersions:
+    def test_reads_all(self, tmp_path):
+        _make_repo(tmp_path, "1.1.27-SNAPSHOT", "1.1.27-SNAPSHOT", "1.1.27-SNAPSHOT", "1.1.27-SNAPSHOT")
+        primary = FileSpec(path=tmp_path / "pom.xml", patterns=[POM_PRIMARY_PATTERN.pattern])
+        secondaries = [
+            FileSpec(path=tmp_path / "chart/Chart.yaml", patterns=CHART_SECONDARY_PATTERNS),
+            FileSpec(path=tmp_path / "pipeline.yaml", patterns=[PIPELINE_SECONDARY_PATTERN]),
+        ]
+        primary_v, secondary_matches = read_all_versions(primary, secondaries)
+        assert primary_v == "1.1.27-SNAPSHOT"
+        assert len(secondary_matches) == 3  # 2 chart + 1 pipeline
+        assert all(m.matched_version == "1.1.27-SNAPSHOT" for m in secondary_matches)
+
+
+class TestVerifyConsistency:
+    def test_consistent(self, tmp_path):
+        _make_repo(tmp_path, "1.1.27-SNAPSHOT", "1.1.27-SNAPSHOT", "1.1.27-SNAPSHOT", "1.1.27-SNAPSHOT")
+        primary = FileSpec(path=tmp_path / "pom.xml", patterns=[POM_PRIMARY_PATTERN.pattern])
+        secondaries = [
+            FileSpec(path=tmp_path / "chart/Chart.yaml", patterns=CHART_SECONDARY_PATTERNS),
+            FileSpec(path=tmp_path / "pipeline.yaml", patterns=[PIPELINE_SECONDARY_PATTERN]),
+        ]
+        # should not raise
+        verify_versions_consistent(primary, secondaries)
+
+    def test_inconsistent_raises(self, tmp_path):
+        _make_repo(tmp_path, "1.1.27-SNAPSHOT", "1.1.26", "1.1.27-SNAPSHOT", "1.1.27-SNAPSHOT")
+        primary = FileSpec(path=tmp_path / "pom.xml", patterns=[POM_PRIMARY_PATTERN.pattern])
+        secondaries = [
+            FileSpec(path=tmp_path / "chart/Chart.yaml", patterns=CHART_SECONDARY_PATTERNS),
+        ]
+        with pytest.raises(VersionMismatchError) as exc:
+            verify_versions_consistent(primary, secondaries)
+        assert "1.1.26" in str(exc.value)
+
+
+class TestReplaceVersionInFiles:
+    def test_replaces_everywhere(self, tmp_path):
+        _make_repo(tmp_path, "1.1.27-SNAPSHOT", "1.1.27-SNAPSHOT", "1.1.27-SNAPSHOT", "1.1.27-SNAPSHOT")
+        primary = FileSpec(path=tmp_path / "pom.xml", patterns=[POM_PRIMARY_PATTERN.pattern])
+        secondaries = [
+            FileSpec(path=tmp_path / "chart/Chart.yaml", patterns=CHART_SECONDARY_PATTERNS),
+            FileSpec(path=tmp_path / "pipeline.yaml", patterns=[PIPELINE_SECONDARY_PATTERN]),
+        ]
+        n = replace_version_in_files(primary, secondaries, "1.1.27-SNAPSHOT", "1.1.27")
+        assert n == 4  # 1 pom + 2 chart + 1 pipeline
+        assert "1.1.27-SNAPSHOT" not in (tmp_path / "pom.xml").read_text(encoding="utf-8")
+        assert "1.1.27-SNAPSHOT" not in (tmp_path / "chart/Chart.yaml").read_text(encoding="utf-8")
+        assert "1.1.27-SNAPSHOT" not in (tmp_path / "pipeline.yaml").read_text(encoding="utf-8")
