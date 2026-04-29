@@ -1,6 +1,7 @@
 """Flow orchestrator: pre-flight, branch policy, phase execution."""
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal
 
 from release_flow.exceptions import FlowError, UserAbortError
@@ -222,3 +223,63 @@ def execute_phase_bump_pending(
     git.add(files_to_add)
     git.commit(msg)
     return next_v
+
+
+def execute_phase_bumped_local(
+    git: GitRepo,
+    release_branch: str,
+    develop_branch: str,
+    version_files: list[Path],
+    prompter: Prompter,
+    merge_msg_template: str,
+    release_version: str,
+    confirm_before_push: bool,
+) -> None:
+    """Phase 6 → 7: merge release branch into develop, resolving conflicts
+    on version_files with --ours (keep develop's bumped version).
+
+    Refuses if conflicts exist on files OUTSIDE the version_files set.
+    """
+    # Trigger pull (creates merge with conflict)
+    git._run(
+        ["pull", "origin", release_branch, "--no-edit", "--no-rebase"],
+        check=False,
+    )
+
+    # Detect unmerged paths
+    unmerged_out = git._run(
+        ["diff", "--name-only", "--diff-filter=U"], check=False
+    ).stdout.strip()
+    unmerged = [u for u in unmerged_out.splitlines() if u]
+
+    version_paths = {str(p.relative_to(git.root)).replace("\\", "/") for p in version_files}
+    # Normalize unmerged paths too (git outputs forward slashes)
+    foreign = [u for u in unmerged if u not in version_paths]
+    if foreign:
+        raise FlowError(
+            f"merge-back has conflicts on non-version files: {foreign}. "
+            f"Aborting auto-resolution. Resolve manually then commit."
+        )
+
+    if unmerged:
+        confirmed = prompter.confirm(
+            f"Conflitti solo su file di versione: {sorted(unmerged)}. "
+            f"Risolvo con --ours (mantengo versione di develop)?",
+            default=True,
+        )
+        if not confirmed:
+            raise UserAbortError("user declined --ours resolution")
+
+        # Resolve each version file with our version (the bumped one)
+        for path in version_paths & set(unmerged):
+            git._run(["checkout", "--ours", "--", path])
+            git._run(["add", "--", path])
+
+        merge_msg = merge_msg_template.format(version=release_version)
+        git._run(["commit", "--no-edit", "-m", merge_msg])
+
+    if confirm_before_push:
+        confirmed = prompter.confirm("Push origin develop?", default=True)
+        if not confirmed:
+            raise UserAbortError("user declined push develop")
+    git.push("origin", develop_branch)

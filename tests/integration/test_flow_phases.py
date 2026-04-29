@@ -5,6 +5,7 @@ import responses
 
 from release_flow.flow import (
     execute_phase_bump_pending,
+    execute_phase_bumped_local,
     execute_phase_clean,
     execute_phase_frozen_local,
     execute_phase_frozen_pushed,
@@ -240,3 +241,53 @@ class TestExecutePhaseBumpPending:
         pom = (repo / "pom.xml").read_text(encoding="utf-8")
         assert "1.0.1-SNAPSHOT" in pom
         assert "version bump 1.0.1-SNAPSHOT" in gr.last_commit_message()
+
+
+@pytest.mark.integration
+class TestExecutePhaseBumpedLocal:
+    def test_merge_back_resolves_version_conflicts(self, tmp_repo_with_origin):
+        repo = tmp_repo_with_origin
+        _setup_java_repo(repo)
+        gr = GitRepo(repo)
+        # Simulate: release branch with freeze version, develop with bump
+        gr.create_branch("release/release-1.0.0")
+        (repo / "pom.xml").write_text(
+            (repo / "pom.xml").read_text().replace("1.0.0-SNAPSHOT", "1.0.0"),
+            encoding="utf-8",
+        )
+        gr.add(["pom.xml"])
+        gr.commit("version freeze 1.0.0")
+        gr.push("origin", "release/release-1.0.0", set_upstream=True)
+
+        gr.checkout("develop")
+        (repo / "pom.xml").write_text(
+            (repo / "pom.xml").read_text().replace("1.0.0-SNAPSHOT", "1.0.1-SNAPSHOT"),
+            encoding="utf-8",
+        )
+        gr.add(["pom.xml"])
+        gr.commit("version bump 1.0.1-SNAPSHOT")
+
+        prompter = ScriptedPrompter()
+        prompter.queue(["yes", "yes"])  # confirm --ours, confirm push
+
+        execute_phase_bumped_local(
+            git=gr,
+            release_branch="release/release-1.0.0",
+            develop_branch="develop",
+            version_files=[repo / "pom.xml"],
+            prompter=prompter,
+            merge_msg_template="Merge release {version} into develop",
+            release_version="1.0.0",
+            confirm_before_push=True,
+        )
+
+        # develop has next-snapshot, merge commit present, pushed
+        assert "1.0.1-SNAPSHOT" in (repo / "pom.xml").read_text(encoding="utf-8")
+        # the last commit might be either "Merge release X" OR a fast-forward merge.
+        # If a real merge happened, message contains "Merge"; if FF, it's the bump commit.
+        # Either way, develop should be in sync with the bumped version, NO open conflicts.
+        # Pushed: develop is at origin/develop (count of left==0 == not ahead)
+        ahead_behind = gr._run(
+            ["rev-list", "--left-right", "--count", "develop...origin/develop"]
+        ).stdout.strip().split()
+        assert int(ahead_behind[0]) == 0  # not ahead — pushed
