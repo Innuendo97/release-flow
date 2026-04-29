@@ -4,9 +4,11 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
-from release_flow.exceptions import FlowError
+from release_flow.exceptions import FlowError, VersionMismatchError
+from release_flow.git_repo import GitRepo
 from release_flow.gitlab_client import MergeRequest
 from release_flow.version_bump import is_snapshot
+from release_flow.version_io import FileSpec, read_all_versions, verify_versions_consistent
 
 
 class Phase(StrEnum):
@@ -100,4 +102,53 @@ def detect_phase(s: RepoSnapshot) -> Phase:
     raise FlowError(
         f"unexpected branch {s.current_branch!r}: not develop, not a release branch. "
         f"Branch policy should have caught this earlier."
+    )
+
+
+def build_snapshot(
+    git: GitRepo,
+    primary: FileSpec,
+    secondaries: list[FileSpec],
+    release_branch_prefix: str,
+    mrs_for_release_branch: list[MergeRequest],
+) -> RepoSnapshot:
+    """Build a RepoSnapshot from the live state of the repo + GitLab.
+
+    Catches VersionMismatchError and reflects it via
+    `secondary_versions_consistent=False` (caller can route to recovery).
+    """
+    current = git.current_branch()
+    release_name = (
+        current if current.startswith(release_branch_prefix) else None
+    )
+    primary_v, _ = read_all_versions(primary, secondaries)
+    try:
+        verify_versions_consistent(primary, secondaries)
+        consistent = True
+    except VersionMismatchError:
+        consistent = False
+
+    # ahead/behind detection vs origin/develop
+    ahead = behind = False
+    if "develop" in git.local_branches() and "origin/develop" in git.remote_branches():
+        ahead_behind = git._run(
+            ["rev-list", "--left-right", "--count", "develop...origin/develop"]
+        ).stdout.strip().split()
+        if len(ahead_behind) == 2:
+            ahead = int(ahead_behind[0]) > 0
+            behind = int(ahead_behind[1]) > 0
+
+    return RepoSnapshot(
+        repo_root=git.root,
+        current_branch=current,
+        working_tree_clean=git.is_working_tree_clean(),
+        primary_version=primary_v,
+        secondary_versions_consistent=consistent,
+        last_commit_message=git.last_commit_message(),
+        local_branches=git.local_branches(),
+        remote_branches=git.remote_branches(),
+        open_mrs_for_release_branch=mrs_for_release_branch,
+        release_branch_name=release_name,
+        develop_ahead_of_origin=ahead,
+        develop_behind_origin=behind,
     )
