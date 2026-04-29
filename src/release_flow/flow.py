@@ -3,7 +3,12 @@
 from dataclasses import dataclass, field
 from typing import Literal
 
+from release_flow.exceptions import FlowError
+from release_flow.git_repo import GitRepo
+from release_flow.prompts import Prompter
 from release_flow.states import RepoSnapshot
+from release_flow.version_bump import BumpType, strip_snapshot
+from release_flow.version_io import FileSpec, replace_version_in_files
 
 
 @dataclass(frozen=True)
@@ -78,3 +83,33 @@ def evaluate_branch_policy(
             f"Will checkout develop and proceed."
         ),
     )
+
+
+def execute_phase_clean(
+    git: GitRepo,
+    primary: FileSpec,
+    secondaries: list[FileSpec],
+    prompter: Prompter,
+    current_version: str,
+    release_branch_prefix: str,
+    default_bump: BumpType,
+) -> None:
+    """Phase 0 → 1: create release branch, strip -SNAPSHOT in version files.
+
+    Files are MODIFIED but not committed; that's done in execute_phase_release_branch_created.
+    """
+    suggested_release_v = strip_snapshot(current_version)
+    release_v = prompter.ask(
+        "Versione di release", default=suggested_release_v
+    )
+    suggested_branch = f"{release_branch_prefix}{release_v}"
+    branch_name = prompter.ask("Nome release branch", default=suggested_branch)
+
+    git.create_branch(branch_name)
+    n = replace_version_in_files(
+        primary, secondaries, current_version, release_v
+    )
+    if n == 0:
+        raise FlowError(
+            f"no version replacements made for {current_version!r} → {release_v!r}"
+        )
