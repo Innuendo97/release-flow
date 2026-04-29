@@ -99,3 +99,68 @@ class TestChartYaml:
         new = chart.read_text(encoding="utf-8")
         assert new.count("1.1.27") == 2
         assert "SNAPSHOT" not in new
+
+
+PIPELINE_CONTENT = '''SVILUPPO:
+  DEPLOY:
+    service-rds-app:
+      VERSION_TO_INSTALL: "1.1.27-SNAPSHOT"
+      OCP_CLUSTER_URL: "https://example"
+'''
+
+PACKAGE_JSON_CONTENT = '''{
+  "name": "my-app",
+  "version": "1.1.27-SNAPSHOT",
+  "dependencies": {
+    "react": "1.1.27"
+  }
+}
+'''
+
+GO_CONST_CONTENT = '''package version
+
+const Version = "1.1.27-SNAPSHOT"
+'''
+
+
+class TestPipelineYaml:
+    def test_finds_version_to_install(self, tmp_path):
+        from release_flow.version_io import (
+            PIPELINE_SECONDARY_PATTERN,
+            find_version_occurrences,
+        )
+
+        p = tmp_path / "pipeline.yaml"
+        p.write_text(PIPELINE_CONTENT, encoding="utf-8")
+        matches = find_version_occurrences(p, [PIPELINE_SECONDARY_PATTERN])
+        assert len(matches) == 1
+        assert matches[0].matched_version == "1.1.27-SNAPSHOT"
+
+
+class TestPackageJson:
+    def test_finds_top_level_version_only(self, tmp_path):
+        from release_flow.version_io import (
+            PACKAGE_JSON_PATTERN,
+            find_version_occurrences,
+        )
+
+        p = tmp_path / "package.json"
+        p.write_text(PACKAGE_JSON_CONTENT, encoding="utf-8")
+        matches = find_version_occurrences(p, [PACKAGE_JSON_PATTERN])
+        # MUST match top-level "version" only, NOT the dependency value
+        assert len(matches) == 1
+        assert matches[0].matched_version == "1.1.27-SNAPSHOT"
+
+
+class TestGoConst:
+    def test_finds_version_const(self, tmp_path):
+        from release_flow.version_io import (
+            GO_CONST_PATTERN,
+            find_version_occurrences,
+        )
+
+        p = tmp_path / "version.go"
+        p.write_text(GO_CONST_CONTENT, encoding="utf-8")
+        matches = find_version_occurrences(p, [GO_CONST_PATTERN])
+        assert len(matches) == 1
+        assert matches[0].matched_version == "1.1.27-SNAPSHOT"

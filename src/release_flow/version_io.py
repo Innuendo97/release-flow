@@ -109,3 +109,14 @@ def read_chart_version(chart_path: Path) -> str:
     if not matches:
         raise VersionParseError(f"no top-level 'version:' in {chart_path}")
     return matches[0].matched_version
+
+
+# pipeline.yaml: matches `VERSION_TO_INSTALL: "..."`
+PIPELINE_SECONDARY_PATTERN = r'VERSION_TO_INSTALL:\s*"(?P<v>[^"]+)"'
+
+# package.json: top-level "version": "..." — anchored to start-of-line + 2 spaces
+# (rules out nested dependency versions which are deeper in the JSON tree).
+PACKAGE_JSON_PATTERN = r'^\s{0,4}"version":\s*"(?P<v>[^"]+)"'
+
+# Go: const Version = "..."
+GO_CONST_PATTERN = r'(?:const\s+)?Version\s*=\s*"(?P<v>[^"]+)"'
