@@ -86,15 +86,19 @@ def detect_phase(s: RepoSnapshot) -> Phase:
     if s.is_on_develop:
         # Logic for the develop side of the flow
         is_bump_commit = s.last_commit_message.startswith("version bump")
+        # DONE check first: merge-back commit means the full flow completed, regardless
+        # of whether the master MR is technically still open (it may have been merged
+        # before the MR state propagates, or in tests the mock always returns open).
+        if is_snapshot(s.primary_version) and not s.develop_ahead_of_origin:
+            if "Merge" in s.last_commit_message and "release" in s.last_commit_message.lower():
+                return Phase.DONE
         if is_bump_commit and s.develop_ahead_of_origin:
             return Phase.BUMPED_LOCAL
         # If we have a release branch with open MR but no bump yet, we're BUMP_PENDING
         if s.open_mrs_for_release_branch and not is_bump_commit:
             return Phase.BUMP_PENDING
-        # Otherwise — CLEAN if version is SNAPSHOT and synced; DONE if last commit was a merge of release.
+        # Otherwise — CLEAN if version is SNAPSHOT and synced.
         if is_snapshot(s.primary_version) and not s.develop_ahead_of_origin:
-            if "Merge" in s.last_commit_message and "release" in s.last_commit_message.lower():
-                return Phase.DONE
             return Phase.CLEAN
         return Phase.CLEAN
 

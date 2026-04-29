@@ -4,13 +4,21 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
+from release_flow.config import Config, ProjectTypeConfig
 from release_flow.exceptions import FlowError, UserAbortError
 from release_flow.git_repo import GitRepo
 from release_flow.gitlab_client import GitLabClient, MergeRequest
+from release_flow.project_detector import detect_project_type
 from release_flow.prompts import Prompter
-from release_flow.states import RepoSnapshot
+from release_flow.recovery import detect_recovery_needed
+from release_flow.states import Phase, RepoSnapshot, build_snapshot, detect_phase
 from release_flow.version_bump import BumpType, bump_version, strip_snapshot, to_snapshot
-from release_flow.version_io import FileSpec, replace_version_in_files
+from release_flow.version_io import (
+    CHART_SECONDARY_PATTERNS,
+    PIPELINE_SECONDARY_PATTERN,
+    FileSpec,
+    replace_version_in_files,
+)
 
 
 @dataclass(frozen=True)
@@ -283,3 +291,195 @@ def execute_phase_bumped_local(
         if not confirmed:
             raise UserAbortError("user declined push develop")
     git.push("origin", develop_branch)
+
+
+# Built-in pattern map for known files. Used to construct FileSpec from
+# config's bare-path lists.
+BUILTIN_PATTERNS: dict[str, list[str]] = {
+    "pom.xml": [r"<artifactId>[^<]+</artifactId>\s*<version>(?P<v>[^<]+)</version>"],
+    "Chart.yaml": CHART_SECONDARY_PATTERNS,
+    "chart/Chart.yaml": CHART_SECONDARY_PATTERNS,
+    ".helm/Chart.yaml": CHART_SECONDARY_PATTERNS,
+    "pipeline.yaml": [PIPELINE_SECONDARY_PATTERN],
+    "package.json": [r'^\s{0,4}"version":\s*"(?P<v>[^"]+)"'],
+}
+
+
+@dataclass(frozen=True)
+class FlowResult:
+    final_phase: Phase
+    created_mr: MergeRequest | None = None
+    final_version: str = ""
+
+
+def _build_filespecs(
+    repo_root: Path, project_type: ProjectTypeConfig
+) -> tuple[FileSpec, list[FileSpec]]:
+    primary = FileSpec(
+        path=repo_root / project_type.primary_file,
+        patterns=BUILTIN_PATTERNS.get(project_type.primary_file, []),
+    )
+    secondaries = [
+        FileSpec(
+            path=repo_root / f,
+            patterns=BUILTIN_PATTERNS.get(f, BUILTIN_PATTERNS.get(Path(f).name, [])),
+        )
+        for f in project_type.secondary_files
+        if (repo_root / f).exists()
+    ]
+    return primary, secondaries
+
+
+def run(
+    repo_root: Path,
+    config: Config,
+    gitlab: GitLabClient,
+    prompter: Prompter,
+    allow_dirty: bool = False,
+    project_path: str | None = None,
+) -> FlowResult:
+    """Top-level orchestrator. Detects project type, builds snapshot,
+    runs pre-flight + branch policy + recovery + phase loop until DONE.
+
+    `project_path` is the GitLab namespace/repo path (e.g. 'org/app').
+    If omitted it is derived from the git remote URL.
+    """
+    git = GitRepo(repo_root)
+
+    # 1. Detect project type
+    project_type_name = detect_project_type(
+        repo_root, {n: {"detect": pt.detect} for n, pt in config.project_types.items()}
+    )
+    project_type = config.project_types[project_type_name]
+    primary, secondaries = _build_filespecs(repo_root, project_type)
+
+    # 2. Get GitLab project path (from arg or derived from git remote URL)
+    if project_path is None:
+        project_path = gitlab.project_path_from_url(git.remote_url("origin"))
+
+    # 3. Snapshot + recovery + branch policy + phase loop
+    created_mr: MergeRequest | None = None
+    max_iterations = 20  # safety limit
+    for _ in range(max_iterations):
+        # fetch open MRs filtered by potential release branch
+        possible_release_branches: set[str] = set()
+        for b in git.local_branches():
+            if b.startswith(config.defaults.release_branch_prefix):
+                possible_release_branches.add(b)
+        for b in git.remote_branches():
+            stripped = b.replace("origin/", "", 1)
+            if stripped.startswith(config.defaults.release_branch_prefix):
+                possible_release_branches.add(stripped)
+
+        mrs: list[MergeRequest] = []
+        for rb in sorted(possible_release_branches):
+            mrs.extend(gitlab.list_open_mrs(project_path, source_branch=rb))
+
+        snapshot = build_snapshot(
+            git=git, primary=primary, secondaries=secondaries,
+            release_branch_prefix=config.defaults.release_branch_prefix,
+            mrs_for_release_branch=mrs,
+        )
+
+        # Pre-flight
+        # Allow dirty working tree when on a release branch: RELEASE_BRANCH_CREATED is
+        # intentionally dirty (version files changed but not yet committed).
+        effective_allow_dirty = allow_dirty or snapshot.is_on_release_branch
+        pre = run_preflight(snapshot, allow_dirty=effective_allow_dirty)
+        recovery_action = detect_recovery_needed(snapshot)
+        if not pre.passed and recovery_action is None:
+            raise FlowError("pre-flight failed: " + "; ".join(pre.failures))
+
+        # Recovery (if needed) — orchestrator delegates
+        if recovery_action is not None:
+            raise FlowError(
+                f"recovery needed: {recovery_action}. "
+                f"Run release-flow with --status to inspect."
+            )
+
+        # Branch policy (only when not on develop or release branch)
+        if not (snapshot.is_on_develop or snapshot.is_on_release_branch):
+            policy = evaluate_branch_policy(snapshot, feature_has_unmerged_commits=False)
+            if policy.action == "stop":
+                raise FlowError(policy.reason)
+            if policy.action == "switch_to_develop":
+                git.checkout(config.defaults.develop_branch)
+                continue
+
+        # Detect and execute phase
+        phase = detect_phase(snapshot)
+        if phase == Phase.DONE:
+            return FlowResult(
+                final_phase=phase,
+                created_mr=created_mr,
+                final_version=snapshot.primary_version,
+            )
+
+        if phase == Phase.CLEAN:
+            execute_phase_clean(
+                git=git, primary=primary, secondaries=secondaries,
+                prompter=prompter, current_version=snapshot.primary_version,
+                release_branch_prefix=config.defaults.release_branch_prefix,
+                default_bump=BumpType(config.defaults.default_bump),
+            )
+        elif phase == Phase.RELEASE_BRANCH_CREATED:
+            modified = [str(primary.path.relative_to(repo_root)).replace("\\", "/")]
+            modified.extend(
+                str(s.path.relative_to(repo_root)).replace("\\", "/") for s in secondaries
+            )
+            release_v = strip_snapshot(snapshot.primary_version)
+            execute_phase_release_branch_created(
+                git=git, release_version=release_v, modified_files=modified,
+                prompter=prompter,
+                commit_msg_template=config.defaults.freeze_commit_msg,
+            )
+        elif phase == Phase.FROZEN_LOCAL:
+            execute_phase_frozen_local(
+                git=git, release_branch=snapshot.current_branch,
+                master_branch=config.defaults.master_branch,
+                prompter=prompter,
+                confirm_before_push=config.behavior.confirm_before_push,
+            )
+        elif phase == Phase.FROZEN_PUSHED:
+            release_v = snapshot.primary_version
+            mr = execute_phase_frozen_pushed(
+                gitlab=gitlab, project_path=project_path,
+                release_branch=snapshot.current_branch,
+                master_branch=config.defaults.master_branch,
+                release_version=release_v, prompter=prompter,
+                mr_title_template=config.defaults.mr_master_title,
+                mr_body_template=config.defaults.mr_master_body_template,
+                confirm_before_mr=config.behavior.confirm_before_mr,
+            )
+            created_mr = mr
+        elif phase == Phase.MR_MASTER_OPEN:
+            execute_phase_mr_master_open(
+                git=git, develop_branch=config.defaults.develop_branch
+            )
+        elif phase == Phase.BUMP_PENDING:
+            execute_phase_bump_pending(
+                git=git, primary=primary, secondaries=secondaries,
+                prompter=prompter, current_version=snapshot.primary_version,
+                default_bump=BumpType(config.defaults.default_bump),
+                commit_msg_template=config.defaults.bump_commit_msg,
+            )
+        elif phase == Phase.BUMPED_LOCAL:
+            release_branches = [
+                b for b in snapshot.local_branches
+                if b.startswith(config.defaults.release_branch_prefix)
+            ]
+            release_branch = release_branches[0] if release_branches else ""
+            release_v = release_branch.replace(config.defaults.release_branch_prefix, "")
+            version_files = [primary.path] + [s.path for s in secondaries]
+            execute_phase_bumped_local(
+                git=git, release_branch=release_branch,
+                develop_branch=config.defaults.develop_branch,
+                version_files=version_files, prompter=prompter,
+                merge_msg_template=config.defaults.merge_back_commit_msg,
+                release_version=release_v,
+                confirm_before_push=config.behavior.confirm_before_push,
+            )
+        else:
+            raise FlowError(f"unhandled phase: {phase}")
+
+    raise FlowError(f"orchestrator exceeded {max_iterations} iterations without reaching DONE")
