@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from typing import Literal
 
-from release_flow.exceptions import FlowError
+from release_flow.exceptions import FlowError, UserAbortError
 from release_flow.git_repo import GitRepo
 from release_flow.prompts import Prompter
 from release_flow.states import RepoSnapshot
@@ -127,3 +127,24 @@ def execute_phase_release_branch_created(
     msg = prompter.ask("Messaggio commit", default=suggested_msg)
     git.add(modified_files)
     git.commit(msg)
+
+
+def execute_phase_frozen_local(
+    git: GitRepo,
+    release_branch: str,
+    master_branch: str,
+    prompter: Prompter,
+    confirm_before_push: bool,
+) -> None:
+    """Phase 2 → 3: pull master into release branch, then push.
+
+    Aborts on non-trivial conflicts during pull master (caller catches GitError).
+    """
+    git.pull_ff_only("origin", master_branch)  # ff-only — refuses non-FF
+    if confirm_before_push:
+        confirmed = prompter.confirm(
+            f"Push origin {release_branch}?", default=True
+        )
+        if not confirmed:
+            raise UserAbortError("user declined push")
+    git.push("origin", release_branch, set_upstream=True)

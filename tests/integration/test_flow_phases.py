@@ -2,7 +2,11 @@ from pathlib import Path
 
 import pytest
 
-from release_flow.flow import execute_phase_clean, execute_phase_release_branch_created
+from release_flow.flow import (
+    execute_phase_clean,
+    execute_phase_frozen_local,
+    execute_phase_release_branch_created,
+)
 from release_flow.git_repo import GitRepo
 from release_flow.prompts import ScriptedPrompter
 from release_flow.version_bump import BumpType
@@ -110,3 +114,30 @@ class TestExecutePhaseReleaseBranchCreated:
         )
         assert "version freeze 1.0.0" in gr.last_commit_message()
         assert gr.is_working_tree_clean() is True
+
+
+@pytest.mark.integration
+class TestExecutePhaseFrozenLocal:
+    def test_pull_master_and_push(self, tmp_repo_with_origin):
+        repo = tmp_repo_with_origin
+        _setup_java_repo(repo)
+        gr = GitRepo(repo)
+        gr.create_branch("release/release-1.0.0")
+        (repo / "pom.xml").write_text(
+            (repo / "pom.xml").read_text().replace("1.0.0-SNAPSHOT", "1.0.0"),
+            encoding="utf-8",
+        )
+        gr.add(["pom.xml"])
+        gr.commit("version freeze 1.0.0")
+        prompter = ScriptedPrompter()
+        prompter.queue(["yes"])  # confirm push
+
+        execute_phase_frozen_local(
+            git=gr,
+            release_branch="release/release-1.0.0",
+            master_branch="master",
+            prompter=prompter,
+            confirm_before_push=True,
+        )
+        # branch is pushed
+        assert "origin/release/release-1.0.0" in gr.remote_branches()
