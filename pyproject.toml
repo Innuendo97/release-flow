@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "release-flow"
+version = "0.1.0"
+description = "Automate GitFlow release workflow across multi-language repos"
+requires-python = ">=3.11"
+dependencies = [
+    "python-gitlab>=4.4",
+    "questionary>=2.0",
+    "rich>=13.7",
+    "click>=8.1",
+    "packaging>=23",
+]
+
+[project.scripts]
+release-flow = "release_flow.cli:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=4.1",
+    "hypothesis>=6.95",
+    "responses>=0.25",
+    "ruff>=0.4",
+    "mypy>=1.10",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "invariant: hard-coded safety invariants (must never fail)",
+    "integration: integration tests with real git",
+]
+addopts = "-v --strict-markers"
