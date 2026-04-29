@@ -113,3 +113,17 @@ def execute_phase_clean(
         raise FlowError(
             f"no version replacements made for {current_version!r} → {release_v!r}"
         )
+
+
+def execute_phase_release_branch_created(
+    git: GitRepo,
+    release_version: str,
+    modified_files: list[str],
+    prompter: Prompter,
+    commit_msg_template: str,
+) -> None:
+    """Phase 1 → 2: stage modified files and commit freeze."""
+    suggested_msg = commit_msg_template.format(version=release_version)
+    msg = prompter.ask("Messaggio commit", default=suggested_msg)
+    git.add(modified_files)
+    git.commit(msg)

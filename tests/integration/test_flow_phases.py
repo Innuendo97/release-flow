@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from release_flow.flow import execute_phase_clean
+from release_flow.flow import execute_phase_clean, execute_phase_release_branch_created
 from release_flow.git_repo import GitRepo
 from release_flow.prompts import ScriptedPrompter
 from release_flow.version_bump import BumpType
@@ -82,3 +82,31 @@ class TestExecutePhaseClean:
         assert 'VERSION_TO_INSTALL: "1.0.0"' in (repo / "pipeline.yaml").read_text(encoding="utf-8")
         # Files modified but NOT yet committed (we're in RELEASE_BRANCH_CREATED phase)
         assert gr.is_working_tree_clean() is False
+
+
+@pytest.mark.integration
+class TestExecutePhaseReleaseBranchCreated:
+    def test_commits_freeze(self, tmp_repo_with_origin):
+        repo = tmp_repo_with_origin
+        _setup_java_repo(repo)
+        gr = GitRepo(repo)
+        gr.create_branch("release/release-1.0.0")
+        # Modify a file to simulate state after Task 21
+        (repo / "pom.xml").write_text(
+            (repo / "pom.xml").read_text().replace("1.0.0-SNAPSHOT", "1.0.0"),
+            encoding="utf-8",
+        )
+        prompter = ScriptedPrompter()
+        prompter.queue([
+            "version freeze 1.0.0",   # commit message default-confirmed
+        ])
+
+        execute_phase_release_branch_created(
+            git=gr,
+            release_version="1.0.0",
+            modified_files=["pom.xml"],
+            prompter=prompter,
+            commit_msg_template="version freeze {version}",
+        )
+        assert "version freeze 1.0.0" in gr.last_commit_message()
+        assert gr.is_working_tree_clean() is True
