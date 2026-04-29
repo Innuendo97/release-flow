@@ -11,6 +11,25 @@ from pathlib import Path
 
 from release_flow.exceptions import GitError
 
+# === PROTECTED BRANCHES ===
+# These names can NEVER be deleted, force-pushed, or hard-reset by release-flow.
+# Hardcoded — not derivable from user config. Belt + suspenders safety.
+PROTECTED_BRANCH_NAMES: frozenset[str] = frozenset({"develop", "master", "main"})
+
+
+def _refuse_if_protected(branch: str, op: str) -> None:
+    """Raise ProtectedBranchError if `branch` is in PROTECTED_BRANCH_NAMES.
+
+    HARD-CODED INVARIANT: cannot be bypassed by any flag, config, or argument.
+    """
+    if branch in PROTECTED_BRANCH_NAMES:
+        from release_flow.exceptions import ProtectedBranchError
+
+        raise ProtectedBranchError(
+            f"refusing {op!r} on protected branch '{branch}'. "
+            f"This is a hard-coded invariant in release-flow and cannot be bypassed."
+        )
+
 
 @dataclass(frozen=True)
 class GitResult:
@@ -77,3 +96,49 @@ class GitRepo:
 
     def branch_exists_remote(self, name: str, remote: str = "origin") -> bool:
         return f"{remote}/{name}" in self.remote_branches(remote)
+
+    # --- write ops ---
+
+    def create_branch(self, name: str, base: str | None = None) -> None:
+        args = ["checkout", "-b", name]
+        if base:
+            args.append(base)
+        self._run(args)
+
+    def checkout(self, ref: str) -> None:
+        self._run(["checkout", ref])
+
+    def add(self, paths: list[str]) -> None:
+        self._run(["add", "--", *paths])
+
+    def commit(self, message: str) -> None:
+        self._run(["commit", "-m", message])
+
+    def push(self, remote: str, branch: str, set_upstream: bool = False) -> None:
+        # Normal (non-force) push is allowed on any branch including develop/master.
+        args = ["push"]
+        if set_upstream:
+            args.append("-u")
+        args.extend([remote, branch])
+        self._run(args)
+
+    def pull_ff_only(self, remote: str, branch: str) -> None:
+        self._run(["pull", "--ff-only", remote, branch])
+
+    def delete_local_branch(self, name: str) -> None:
+        _refuse_if_protected(name, "delete_local_branch")
+        self._run(["branch", "-D", name])
+
+    def delete_remote_branch(self, remote: str, name: str) -> None:
+        _refuse_if_protected(name, "delete_remote_branch")
+        self._run(["push", remote, "--delete", name])
+
+    def force_push(self, remote: str, branch: str) -> None:
+        _refuse_if_protected(branch, "force_push")
+        self._run(["push", "--force-with-lease", remote, branch])
+
+    def hard_reset_to(self, branch: str, ref: str) -> None:
+        _refuse_if_protected(branch, "hard_reset_to")
+        # Ensure we're on `branch` first
+        self.checkout(branch)
+        self._run(["reset", "--hard", ref])
