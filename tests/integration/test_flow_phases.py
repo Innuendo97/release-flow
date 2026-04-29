@@ -4,6 +4,7 @@ import pytest
 import responses
 
 from release_flow.flow import (
+    execute_phase_bump_pending,
     execute_phase_clean,
     execute_phase_frozen_local,
     execute_phase_frozen_pushed,
@@ -203,3 +204,39 @@ class TestExecutePhaseMrMasterOpen:
         gr.create_branch("release/release-1.0.0")
         execute_phase_mr_master_open(git=gr, develop_branch="develop")
         assert gr.current_branch() == "develop"
+
+
+@pytest.mark.integration
+class TestExecutePhaseBumpPending:
+    def test_bumps_and_commits(self, tmp_repo_with_origin):
+        repo = tmp_repo_with_origin
+        _setup_java_repo(repo)
+        gr = GitRepo(repo)
+        primary = FileSpec(
+            path=repo / "pom.xml",
+            patterns=[r"<artifactId>[^<]+</artifactId>\s*<version>(?P<v>[^<]+)</version>"],
+        )
+        secondaries = [
+            FileSpec(path=repo / "chart/Chart.yaml", patterns=CHART_SECONDARY_PATTERNS),
+            FileSpec(path=repo / "pipeline.yaml", patterns=[PIPELINE_SECONDARY_PATTERN]),
+        ]
+        prompter = ScriptedPrompter()
+        prompter.queue([
+            "1.0.1-SNAPSHOT",                  # next version
+            "version bump 1.0.1-SNAPSHOT",     # commit message
+        ])
+
+        execute_phase_bump_pending(
+            git=gr,
+            primary=primary,
+            secondaries=secondaries,
+            prompter=prompter,
+            current_version="1.0.0-SNAPSHOT",
+            default_bump=BumpType.PATCH,
+            commit_msg_template="version bump {next_version}",
+        )
+
+        # version updated and committed
+        pom = (repo / "pom.xml").read_text(encoding="utf-8")
+        assert "1.0.1-SNAPSHOT" in pom
+        assert "version bump 1.0.1-SNAPSHOT" in gr.last_commit_message()

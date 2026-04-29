@@ -8,7 +8,7 @@ from release_flow.git_repo import GitRepo
 from release_flow.gitlab_client import GitLabClient, MergeRequest
 from release_flow.prompts import Prompter
 from release_flow.states import RepoSnapshot
-from release_flow.version_bump import BumpType, strip_snapshot
+from release_flow.version_bump import BumpType, bump_version, strip_snapshot, to_snapshot
 from release_flow.version_io import FileSpec, replace_version_in_files
 
 
@@ -191,3 +191,34 @@ def execute_phase_mr_master_open(git: GitRepo, develop_branch: str) -> None:
     """Phase 4 → 5: switch to develop. The MR for master remains open
     awaiting client approval — does NOT block the bump-back."""
     git.checkout(develop_branch)
+
+
+def execute_phase_bump_pending(
+    git: GitRepo,
+    primary: FileSpec,
+    secondaries: list[FileSpec],
+    prompter: Prompter,
+    current_version: str,
+    default_bump: BumpType,
+    commit_msg_template: str,
+) -> str:
+    """Phase 5 → 6: bump SNAPSHOT version on develop, commit.
+
+    Returns the new version string.
+    """
+    bumped = bump_version(strip_snapshot(current_version), default_bump)
+    suggested_next = to_snapshot(bumped)
+    next_v = prompter.ask("Prossima versione SNAPSHOT", default=suggested_next)
+    suggested_msg = commit_msg_template.format(next_version=next_v)
+    msg = prompter.ask("Messaggio commit", default=suggested_msg)
+
+    n = replace_version_in_files(primary, secondaries, current_version, next_v)
+    if n == 0:
+        raise FlowError(f"no version replacements for bump {current_version!r} → {next_v!r}")
+
+    files_to_add = [str(primary.path.relative_to(git.root))]
+    for sec in secondaries:
+        files_to_add.append(str(sec.path.relative_to(git.root)))
+    git.add(files_to_add)
+    git.commit(msg)
+    return next_v
