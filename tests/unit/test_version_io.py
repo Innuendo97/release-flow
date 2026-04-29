@@ -57,3 +57,45 @@ class TestWriteVersionInFile:
             anchor_pattern=r"<artifactId>service-rds-app</artifactId>\s*<version>(?P<v>[^<]+)</version>",
         )
         assert n == 0  # nothing to do
+
+
+CHART_CONTENT = """apiVersion: v2
+appVersion: 1.1.27-SNAPSHOT
+description: A Helm chart
+name: service-rds-app
+type: application
+version: 1.1.27-SNAPSHOT
+"""
+
+
+class TestChartYaml:
+    def test_finds_both_occurrences(self, tmp_path):
+        from release_flow.version_io import (
+            CHART_SECONDARY_PATTERNS,
+            find_version_occurrences,
+        )
+
+        chart = tmp_path / "Chart.yaml"
+        chart.write_text(CHART_CONTENT, encoding="utf-8")
+        matches = find_version_occurrences(chart, CHART_SECONDARY_PATTERNS)
+        assert len(matches) == 2
+        assert all(m.matched_version == "1.1.27-SNAPSHOT" for m in matches)
+        # both lines captured
+        lines = sorted(m.line for m in matches)
+        assert lines == [2, 6]
+
+    def test_replaces_both_occurrences(self, tmp_path):
+        from release_flow.version_io import CHART_SECONDARY_PATTERNS
+
+        chart = tmp_path / "Chart.yaml"
+        chart.write_text(CHART_CONTENT, encoding="utf-8")
+        for pat in CHART_SECONDARY_PATTERNS:
+            write_version_in_file(
+                chart,
+                old_version="1.1.27-SNAPSHOT",
+                new_version="1.1.27",
+                anchor_pattern=pat,
+            )
+        new = chart.read_text(encoding="utf-8")
+        assert new.count("1.1.27") == 2
+        assert "SNAPSHOT" not in new

@@ -68,3 +68,44 @@ def write_version_in_file(
     if count > 0:
         file_path.write_text(new_content, encoding="utf-8")
     return count
+
+
+# Chart.yaml top-level keys 'version' and 'appVersion'.
+# Anchored to start-of-line (^) to avoid matching nested keys.
+CHART_PRIMARY_PATTERN = r"^version:\s*(?P<v>\S.*?)\s*$"
+CHART_SECONDARY_PATTERNS = [
+    r"^appVersion:\s*(?P<v>\S.*?)\s*$",
+    r"^version:\s*(?P<v>\S.*?)\s*$",
+]
+
+
+def find_version_occurrences(
+    file_path: Path, patterns: list[str]
+) -> list[VersionMatch]:
+    """Find every occurrence of every pattern in file. Returns list of matches.
+
+    Useful for diagnostics and for verifying secondary-file consistency.
+    """
+    content = file_path.read_text(encoding="utf-8")
+    matches: list[VersionMatch] = []
+    for pat in patterns:
+        compiled = re.compile(pat, re.MULTILINE)
+        for m in compiled.finditer(content):
+            line = content.count("\n", 0, m.start()) + 1
+            matches.append(
+                VersionMatch(
+                    file=file_path,
+                    line=line,
+                    matched_version=m.group("v").strip(),
+                    full_match_text=m.group(0),
+                )
+            )
+    return matches
+
+
+def read_chart_version(chart_path: Path) -> str:
+    """Read the `version:` top-level key from a Chart.yaml."""
+    matches = find_version_occurrences(chart_path, [CHART_PRIMARY_PATTERN])
+    if not matches:
+        raise VersionParseError(f"no top-level 'version:' in {chart_path}")
+    return matches[0].matched_version
