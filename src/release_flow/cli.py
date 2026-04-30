@@ -94,8 +94,74 @@ def _cmd_main(args: argparse.Namespace) -> int:
 
 
 def _cmd_status(args: argparse.Namespace) -> int:
-    """Stub for status subcommand (implemented in Task 31)."""
-    raise NotImplementedError("status subcommand: implemented in Task 31")
+    """Show current phase and repo state."""
+    from release_flow.config import default_config_path, load_config
+    from release_flow.flow import _build_filespecs
+    from release_flow.git_repo import GitRepo
+    from release_flow.gitlab_client import GitLabClient
+    from release_flow.project_detector import detect_project_type
+    from release_flow.states import build_snapshot, detect_phase
+
+    cfg_path = args.config or default_config_path()
+    try:
+        cfg = load_config(cfg_path)
+    except Exception as e:
+        print(f"Errore caricamento config: {e}")
+        return 1
+
+    repo = Path.cwd()
+    git = GitRepo(repo)
+    if not git.is_git_repo():
+        print(f"{repo} non è un repo git")
+        return 1
+
+    try:
+        project_type_name = detect_project_type(
+            repo, {n: {"detect": pt.detect} for n, pt in cfg.project_types.items()}
+        )
+    except Exception as e:
+        print(f"Errore rilevamento tipo progetto: {e}")
+        return 1
+    project_type = cfg.project_types[project_type_name]
+    primary, secondaries = _build_filespecs(repo, project_type)
+
+    gitlab = GitLabClient(
+        base_url=cfg.gitlab.base_url, token=cfg.gitlab.token,
+    )
+
+    # Find any release branches and try to fetch their MRs
+    mrs = []
+    try:
+        project_path = gitlab.project_path_from_url(git.remote_url("origin"))
+        for b in git.local_branches() + [
+            x.replace("origin/", "", 1) for x in git.remote_branches()
+        ]:
+            if b.startswith(cfg.defaults.release_branch_prefix):
+                mrs.extend(gitlab.list_open_mrs(project_path, source_branch=b))
+    except Exception as e:
+        print(f"Avviso: impossibile contattare GitLab ({e}); proseguo senza MR info.")
+
+    snapshot = build_snapshot(
+        git=git, primary=primary, secondaries=secondaries,
+        release_branch_prefix=cfg.defaults.release_branch_prefix,
+        mrs_for_release_branch=mrs,
+    )
+    try:
+        phase = detect_phase(snapshot)
+    except Exception as e:
+        print(f"Errore rilevamento fase: {e}")
+        return 1
+
+    print(f"Repo:          {repo.name}")
+    print(f"Tipo:          {project_type_name}")
+    print(f"Branch:        {snapshot.current_branch}")
+    print(f"Working tree:  {'pulito' if snapshot.working_tree_clean else 'sporco'}")
+    print(f"Versione:      {snapshot.primary_version}")
+    print(f"Fase:          {phase.value}")
+    if mrs:
+        for mr in mrs:
+            print(f"MR aperte:     !{mr.iid} {mr.title} -> {mr.target_branch}")
+    return 0
 
 
 def _cmd_init(args: argparse.Namespace) -> int:
