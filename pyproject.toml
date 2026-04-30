@@ -38,3 +38,15 @@ markers = [
     "integration: integration tests with real git",
 ]
 addopts = "-v --strict-markers"
+
+[tool.coverage.run]
+source = ["src/release_flow"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 85
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+]
