@@ -3,8 +3,12 @@
 import argparse
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from release_flow import __version__
+
+if TYPE_CHECKING:
+    from release_flow.prompts import QuestionaryPrompter
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -164,9 +168,57 @@ def _cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _init_prompter() -> "QuestionaryPrompter":
+    """Factory — separated so tests can monkeypatch it."""
+    from release_flow.prompts import QuestionaryPrompter
+
+    return QuestionaryPrompter()
+
+
 def _cmd_init(args: argparse.Namespace) -> int:
-    """Stub for init subcommand (implemented in Task 32)."""
-    raise NotImplementedError("init subcommand: implemented in Task 32")
+    """Wizard di setup iniziale: chiede gitlab URL/PAT e scrive config."""
+    import gitlab
+
+    from release_flow.config import default_config_path
+
+    cfg_path = args.config or default_config_path()
+    if cfg_path.exists():
+        print(f"Config già esistente in {cfg_path}. Modifica con 'release-flow config-edit'.")
+        return 0
+
+    prompter = _init_prompter()
+    base_url = prompter.ask("GitLab URL", default="https://gitlab.alm.poste.it")
+    token = prompter.ask("GitLab Personal Access Token", default="")
+    if not token:
+        print("Token richiesto.")
+        return 1
+
+    # Validate token by hitting /user
+    try:
+        gl = gitlab.Gitlab(url=base_url, private_token=token, timeout=10)
+        gl.auth()
+        user = gl.user
+        if user:
+            print(f"Token valido (utente: {user.username})")
+        else:
+            print("Token valido")
+    except Exception as e:
+        print(f"Token non valido o GitLab non raggiungibile: {e}")
+        return 1
+
+    default_bump = prompter.ask("Default bump strategy", default="patch")
+
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.write_text(
+        _DEFAULT_CONFIG_TEMPLATE.format(
+            base_url=base_url,
+            token=token,
+            default_bump=default_bump,
+        ),
+        encoding="utf-8",
+    )
+    print(f"\nConfig scritta in {cfg_path}")
+    return 0
 
 
 def _cmd_doctor(args: argparse.Namespace) -> int:
@@ -187,3 +239,55 @@ def _cmd_config_edit(args: argparse.Namespace) -> int:
 def _cmd_logs(args: argparse.Namespace) -> int:
     """Stub for logs subcommand (implemented in Task 33)."""
     raise NotImplementedError("logs subcommand: implemented in Task 33")
+
+
+_DEFAULT_CONFIG_TEMPLATE = '''[gitlab]
+base_url = "{base_url}"
+token = "{token}"
+http_timeout_seconds = 30
+
+[defaults]
+develop_branch = "develop"
+master_branch = "master"
+release_branch_prefix = "release/release-"
+default_bump = "{default_bump}"
+freeze_commit_msg = "version freeze {{version}}"
+bump_commit_msg = "version bump {{next_version}}"
+merge_back_commit_msg = "Merge release {{version}} into develop"
+mr_master_title = "Release {{version}}"
+mr_master_body_template = """
+## Release {{version}}
+
+### Scope
+TODO
+
+### Rollback
+TODO
+"""
+
+[behavior]
+confirm_before_push = true
+confirm_before_mr = true
+open_mr_in_browser_after_create = true
+mr_develop_strategy = "direct_push"
+
+[logging]
+log_dir = "~/.local/state/release-flow/logs"
+log_retention_days = 30
+verbose_default = false
+
+[project_types.java]
+detect = ["pom.xml"]
+primary_file = "pom.xml"
+secondary_files = ["chart/Chart.yaml", ".helm/Chart.yaml", "pipeline.yaml"]
+
+[project_types.go]
+detect = ["go.mod"]
+primary_file = "internal/version/version.go"
+secondary_files = ["Chart.yaml", "pipeline.yaml"]
+
+[project_types.helm-only]
+detect = ["Chart.yaml", "!pom.xml", "!go.mod"]
+primary_file = "Chart.yaml"
+secondary_files = ["pipeline.yaml"]
+'''
