@@ -2,9 +2,12 @@
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from release_flow.config import Config, ProjectTypeConfig
+
+if TYPE_CHECKING:
+    from release_flow.logging_setup import AuditLogger
 from release_flow.exceptions import FlowError, UserAbortError
 from release_flow.git_repo import GitRepo
 from release_flow.gitlab_client import GitLabClient, MergeRequest
@@ -337,6 +340,7 @@ def run(
     prompter: Prompter,
     allow_dirty: bool = False,
     project_path: str | None = None,
+    audit_logger: "AuditLogger | None" = None,
 ) -> FlowResult:
     """Top-level orchestrator. Detects project type, builds snapshot,
     runs pre-flight + branch policy + recovery + phase loop until DONE.
@@ -408,6 +412,14 @@ def run(
 
         # Detect and execute phase
         phase = detect_phase(snapshot)
+        if audit_logger is not None:
+            audit_logger.log_event(
+                level="info", phase=phase.value, action="execute_phase",
+                extra={
+                    "branch": snapshot.current_branch,
+                    "version": snapshot.primary_version,
+                },
+            )
         if phase == Phase.DONE:
             return FlowResult(
                 final_phase=phase,

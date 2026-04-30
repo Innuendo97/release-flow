@@ -74,27 +74,37 @@ def _cmd_main(args: argparse.Namespace) -> int:
     from release_flow.config import default_config_path, load_config
     from release_flow.flow import run as flow_run
     from release_flow.gitlab_client import GitLabClient
+    from release_flow.logging_setup import AuditLogger
     from release_flow.prompts import QuestionaryPrompter
 
     cfg_path = args.config or default_config_path()
     cfg = load_config(cfg_path)
     gitlab = GitLabClient(
-        base_url=cfg.gitlab.base_url,
-        token=cfg.gitlab.token,
+        base_url=cfg.gitlab.base_url, token=cfg.gitlab.token,
         timeout=cfg.gitlab.http_timeout_seconds,
     )
     prompter = QuestionaryPrompter()
-    result = flow_run(
-        repo_root=Path.cwd(),
-        config=cfg,
-        gitlab=gitlab,
-        prompter=prompter,
-        allow_dirty=args.allow_dirty,
+    repo = Path.cwd()
+
+    logger = AuditLogger(
+        log_dir=Path(cfg.logging.log_dir).expanduser(),
+        repo_name=repo.name,
+        retention_days=cfg.logging.log_retention_days,
     )
-    print(f"\n--- {result.final_phase.value} ---")
-    if result.created_mr:
-        print(f"MR creata: {result.created_mr.web_url}")
-    return 0
+    try:
+        result = flow_run(
+            repo_root=repo, config=cfg, gitlab=gitlab, prompter=prompter,
+            allow_dirty=args.allow_dirty,
+            audit_logger=logger,
+        )
+        logger.log_event(level="info", phase=result.final_phase.value, action="finish")
+        print(f"\n--- {result.final_phase.value} ---")
+        if result.created_mr:
+            print(f"MR creata: {result.created_mr.web_url}")
+        return 0
+    finally:
+        logger.purge_old()
+        logger.close()
 
 
 def _cmd_status(args: argparse.Namespace) -> int:
