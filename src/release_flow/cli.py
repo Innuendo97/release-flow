@@ -222,23 +222,110 @@ def _cmd_init(args: argparse.Namespace) -> int:
 
 
 def _cmd_doctor(args: argparse.Namespace) -> int:
-    """Stub for doctor subcommand (implemented in Task 33)."""
-    raise NotImplementedError("doctor subcommand: implemented in Task 33")
+    """Verify config and connectivity."""
+    import gitlab
+
+    from release_flow.config import default_config_path, load_config
+
+    cfg_path = args.config or default_config_path()
+    try:
+        cfg = load_config(cfg_path)
+        print(f"Config caricata: {cfg_path}")
+    except Exception as e:
+        print(f"Config: {e}")
+        return 1
+
+    try:
+        gl = gitlab.Gitlab(url=cfg.gitlab.base_url, private_token=cfg.gitlab.token, timeout=10)
+        gl.auth()
+        user = gl.user.username if gl.user else "unknown"
+        print(f"GitLab raggiungibile, utente: {user}")
+    except Exception as e:
+        print(f"GitLab: {e}")
+        return 1
+
+    print(f"Tipi progetto configurati: {list(cfg.project_types.keys())}")
+    return 0
 
 
 def _cmd_abort(args: argparse.Namespace) -> int:
-    """Stub for abort subcommand (implemented in Task 33)."""
-    raise NotImplementedError("abort subcommand: implemented in Task 33")
+    """Cleanup current release branch."""
+    from release_flow.config import default_config_path, load_config
+    from release_flow.git_repo import GitRepo
+    from release_flow.prompts import QuestionaryPrompter
+
+    cfg_path = args.config or default_config_path()
+    try:
+        cfg = load_config(cfg_path)
+    except Exception as e:
+        print(f"Errore caricamento config: {e}")
+        return 1
+    repo = Path.cwd()
+    git = GitRepo(repo)
+    if not git.is_git_repo():
+        print(f"{repo} non è un repo git")
+        return 1
+    branch = git.current_branch()
+    if not branch.startswith(cfg.defaults.release_branch_prefix):
+        print(f"Non sei su un release branch (sei su {branch}). Niente da abortire.")
+        return 0
+
+    prompter = QuestionaryPrompter()
+    print(f"Sto per cancellare {branch} (locale e remoto).")
+    if not prompter.confirm("Confermi cancellazione locale?", default=False):
+        return 0
+    if not prompter.confirm("Confermi cancellazione su origin?", default=False):
+        return 0
+    typed = prompter.ask(f"Per sicurezza, digita esattamente '{branch}'", default="")
+    if typed != branch:
+        print("Conferma fallita. Annullo.")
+        return 1
+
+    git.checkout(cfg.defaults.develop_branch)
+    git.delete_local_branch(branch)
+    git.delete_remote_branch("origin", branch)
+    print(f"{branch} cancellato.")
+    return 0
 
 
 def _cmd_config_edit(args: argparse.Namespace) -> int:
-    """Stub for config-edit subcommand (implemented in Task 33)."""
-    raise NotImplementedError("config-edit subcommand: implemented in Task 33")
+    """Open config file in editor."""
+    import os
+    import subprocess
+
+    from release_flow.config import default_config_path
+
+    cfg_path = args.config or default_config_path()
+    if not cfg_path.exists():
+        print(f"Config non esiste in {cfg_path}. Lancia 'release-flow init'.")
+        return 1
+    editor = os.environ.get("EDITOR", "notepad" if os.name == "nt" else "vi")
+    subprocess.run([editor, str(cfg_path)])
+    return 0
 
 
 def _cmd_logs(args: argparse.Namespace) -> int:
-    """Stub for logs subcommand (implemented in Task 33)."""
-    raise NotImplementedError("logs subcommand: implemented in Task 33")
+    """Show audit log location."""
+    from release_flow.config import default_config_path, load_config
+
+    cfg_path = args.config or default_config_path()
+    try:
+        cfg = load_config(cfg_path)
+    except Exception as e:
+        print(f"Errore caricamento config: {e}")
+        return 1
+    log_dir = Path(cfg.logging.log_dir).expanduser()
+    print(f"Log directory: {log_dir}")
+    if not log_dir.exists():
+        print("(nessun log presente)")
+        return 0
+    for repo_dir in sorted(log_dir.iterdir()):
+        if not repo_dir.is_dir():
+            continue
+        files = sorted(repo_dir.glob("*.jsonl"))
+        if files:
+            print(f"  {repo_dir.name}: {len(files)} run, ultimo: {files[-1].name}")
+    return 0
 
 
 _DEFAULT_CONFIG_TEMPLATE = '''[gitlab]
