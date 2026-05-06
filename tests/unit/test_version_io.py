@@ -111,11 +111,10 @@ class TestChartYaml:
         assert "SNAPSHOT" not in new
 
 
-PIPELINE_CONTENT = '''SVILUPPO:
-  DEPLOY:
+PIPELINE_CONTENT = '''environments:
+  dev:
     example-app:
       VERSION_TO_INSTALL: "1.1.27-SNAPSHOT"
-      OCP_CLUSTER_URL: "https://example"
 '''
 
 PACKAGE_JSON_CONTENT = '''{
