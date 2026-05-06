@@ -221,7 +221,7 @@ class TestExecutePhaseFrozenPushed:
                 {},
                 _json.dumps({
                     "iid": 200,
-                    "title": "service-rds-app release 1.0.0",
+                    "title": "example-app release 1.0.0",
                     "source_branch": "release/release-1.0.0",
                     "target_branch": "master",
                     "state": "opened",
@@ -238,7 +238,7 @@ class TestExecutePhaseFrozenPushed:
         )
         client = GitLabClient(base_url="https://gitlab.example", token="glpat-x")
         prompter = ScriptedPrompter()
-        prompter.queue(["yes", "service-rds-app release 1.0.0"])  # confirm upfront, then title
+        prompter.queue(["yes", "example-app release 1.0.0"])  # confirm upfront, then title
         prompter.queue_edit("## Release 1.0.0\n\n### Scope\nfix: bug X\n")
 
         mr = execute_phase_frozen_pushed(
@@ -251,11 +251,11 @@ class TestExecutePhaseFrozenPushed:
             mr_title_template="{repo_name} release {version}",
             mr_body_template="## Release {version}\n\n### Scope\n{last_commit_message}\n",
             confirm_before_mr=True,
-            repo_name="service-rds-app",
+            repo_name="example-app",
             last_commit_message="fix: bug X",
         )
         assert mr.iid == 200
-        assert captured["title"] == "service-rds-app release 1.0.0"
+        assert captured["title"] == "example-app release 1.0.0"
         # Body went through edit_text — that returned the queued edit text.
         # The initial body (before edit) had the templated content.
 

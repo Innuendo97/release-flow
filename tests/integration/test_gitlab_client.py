@@ -48,7 +48,7 @@ class TestListOpenMrs:
                     "target_branch": "master",
                     "state": "opened",
                     "web_url": "https://gitlab.example/org/repo/-/merge_requests/142",
-                    "author": {"username": "daniele.galasso"},
+                    "author": {"username": "test-user"},
                 }
             ],
             status=200,
@@ -78,7 +78,7 @@ class TestCreateMr:
                 "target_branch": "master",
                 "state": "opened",
                 "web_url": "https://gitlab.example/org/repo/-/merge_requests/143",
-                "author": {"username": "daniele.galasso"},
+                "author": {"username": "test-user"},
             },
             status=201,
         )

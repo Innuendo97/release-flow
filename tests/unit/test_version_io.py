@@ -21,10 +21,10 @@ POM_CONTENT = """<?xml version="1.0" encoding="UTF-8"?>
         <artifactId>spring-boot-starter-parent</artifactId>
         <version>3.4.10</version>
     </parent>
-    <groupId>it.poste.rds</groupId>
-    <artifactId>service-rds-app</artifactId>
+    <groupId>com.example</groupId>
+    <artifactId>example-app</artifactId>
     <version>1.1.27-SNAPSHOT</version>
-    <name>service-rds-app</name>
+    <name>example-app</name>
 </project>
 """
 
@@ -50,7 +50,7 @@ class TestWriteVersionInFile:
             pom,
             old_version="1.1.27-SNAPSHOT",
             new_version="1.1.27",
-            anchor_pattern=r"<artifactId>service-rds-app</artifactId>\s*<version>(?P<v>[^<]+)</version>",
+            anchor_pattern=r"<artifactId>example-app</artifactId>\s*<version>(?P<v>[^<]+)</version>",
         )
         assert n == 1
         content = pom.read_text(encoding="utf-8")
@@ -64,7 +64,7 @@ class TestWriteVersionInFile:
             pom,
             old_version="1.1.27-SNAPSHOT",
             new_version="1.1.27",
-            anchor_pattern=r"<artifactId>service-rds-app</artifactId>\s*<version>(?P<v>[^<]+)</version>",
+            anchor_pattern=r"<artifactId>example-app</artifactId>\s*<version>(?P<v>[^<]+)</version>",
         )
         assert n == 0  # nothing to do
 
@@ -72,7 +72,7 @@ class TestWriteVersionInFile:
 CHART_CONTENT = """apiVersion: v2
 appVersion: 1.1.27-SNAPSHOT
 description: A Helm chart
-name: service-rds-app
+name: example-app
 type: application
 version: 1.1.27-SNAPSHOT
 """
@@ -113,7 +113,7 @@ class TestChartYaml:
 
 PIPELINE_CONTENT = '''SVILUPPO:
   DEPLOY:
-    service-rds-app:
+    example-app:
       VERSION_TO_INSTALL: "1.1.27-SNAPSHOT"
       OCP_CLUSTER_URL: "https://example"
 '''

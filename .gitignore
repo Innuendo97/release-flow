@@ -10,3 +10,9 @@ build/
 *.egg-info/
 .venv/
 venv/
+
+# Private project notes (specs, plans, internal usage docs)
+docs/
+
+# Claude Code workspace (local config, not project)
+.claude/

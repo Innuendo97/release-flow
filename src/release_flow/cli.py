@@ -201,7 +201,7 @@ def _cmd_init(args: argparse.Namespace) -> int:
         return 0
 
     prompter = _init_prompter()
-    base_url = prompter.ask("GitLab URL", default="https://gitlab.alm.poste.it")
+    base_url = prompter.ask("GitLab URL", default="https://gitlab.example.com")
     token = prompter.ask("GitLab Personal Access Token", default="")
     if not token:
         print("Token richiesto.")
