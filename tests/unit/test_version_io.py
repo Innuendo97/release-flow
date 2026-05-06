@@ -242,3 +242,54 @@ class TestReplaceVersionInFiles:
         assert "1.1.27-SNAPSHOT" not in (tmp_path / "pom.xml").read_text(encoding="utf-8")
         assert "1.1.27-SNAPSHOT" not in (tmp_path / "chart/Chart.yaml").read_text(encoding="utf-8")
         assert "1.1.27-SNAPSHOT" not in (tmp_path / "pipeline.yaml").read_text(encoding="utf-8")
+
+
+class TestSnapshotSeparatorConvention:
+    """Pipeline.yaml uses '+SNAPSHOT' by team convention, while pom.xml and
+    Chart.yaml use '-SNAPSHOT'. The two forms must be treated as equivalent
+    for comparison, and writes must preserve each file's separator."""
+
+    def test_consistency_does_not_flag_plus_vs_minus(self, tmp_path):
+        # pom + Chart on '-', pipeline on '+' — should be considered consistent
+        _make_repo(tmp_path, "1.1.27-SNAPSHOT", "1.1.27-SNAPSHOT", "1.1.27-SNAPSHOT", "1.1.27+SNAPSHOT")
+        primary = FileSpec(path=tmp_path / "pom.xml", patterns=[POM_PRIMARY_PATTERN.pattern])
+        secondaries = [
+            FileSpec(path=tmp_path / "chart/Chart.yaml", patterns=CHART_SECONDARY_PATTERNS),
+            FileSpec(path=tmp_path / "pipeline.yaml", patterns=[PIPELINE_SECONDARY_PATTERN]),
+        ]
+        # Should NOT raise
+        verify_versions_consistent(primary, secondaries)
+
+    def test_replace_preserves_pipeline_plus_separator_during_bump(self, tmp_path):
+        """Bumping from 1.1.27-SNAPSHOT to 1.1.28-SNAPSHOT should keep
+        pipeline.yaml on '+SNAPSHOT' and others on '-SNAPSHOT'."""
+        _make_repo(tmp_path, "1.1.27-SNAPSHOT", "1.1.27-SNAPSHOT", "1.1.27-SNAPSHOT", "1.1.27+SNAPSHOT")
+        primary = FileSpec(path=tmp_path / "pom.xml", patterns=[POM_PRIMARY_PATTERN.pattern])
+        secondaries = [
+            FileSpec(path=tmp_path / "chart/Chart.yaml", patterns=CHART_SECONDARY_PATTERNS),
+            FileSpec(path=tmp_path / "pipeline.yaml", patterns=[PIPELINE_SECONDARY_PATTERN]),
+        ]
+        n = replace_version_in_files(primary, secondaries, "1.1.27-SNAPSHOT", "1.1.28-SNAPSHOT")
+        assert n == 4
+        assert "1.1.28-SNAPSHOT" in (tmp_path / "pom.xml").read_text(encoding="utf-8")
+        chart_content = (tmp_path / "chart/Chart.yaml").read_text(encoding="utf-8")
+        assert chart_content.count("1.1.28-SNAPSHOT") == 2
+        # Pipeline keeps '+SNAPSHOT' separator
+        pipeline_content = (tmp_path / "pipeline.yaml").read_text(encoding="utf-8")
+        assert "1.1.28+SNAPSHOT" in pipeline_content
+        assert "1.1.28-SNAPSHOT" not in pipeline_content
+
+    def test_replace_strip_snapshot_during_freeze_handles_plus(self, tmp_path):
+        """Stripping SNAPSHOT for the freeze step removes both '-SNAPSHOT'
+        and '+SNAPSHOT'."""
+        _make_repo(tmp_path, "1.1.27-SNAPSHOT", "1.1.27-SNAPSHOT", "1.1.27-SNAPSHOT", "1.1.27+SNAPSHOT")
+        primary = FileSpec(path=tmp_path / "pom.xml", patterns=[POM_PRIMARY_PATTERN.pattern])
+        secondaries = [
+            FileSpec(path=tmp_path / "chart/Chart.yaml", patterns=CHART_SECONDARY_PATTERNS),
+            FileSpec(path=tmp_path / "pipeline.yaml", patterns=[PIPELINE_SECONDARY_PATTERN]),
+        ]
+        n = replace_version_in_files(primary, secondaries, "1.1.27-SNAPSHOT", "1.1.27")
+        assert n == 4
+        assert "SNAPSHOT" not in (tmp_path / "pom.xml").read_text(encoding="utf-8")
+        assert "SNAPSHOT" not in (tmp_path / "chart/Chart.yaml").read_text(encoding="utf-8")
+        assert "SNAPSHOT" not in (tmp_path / "pipeline.yaml").read_text(encoding="utf-8")

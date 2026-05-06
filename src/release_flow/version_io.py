@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from release_flow.exceptions import VersionMismatchError, VersionParseError
+from release_flow.version_bump import normalize_snapshot
 
 # Built-in patterns. Each entry: file glob → (primary_pattern, secondary_patterns).
 # `primary_pattern` matches the AUTHORITATIVE version; `secondary_patterns` are
@@ -48,6 +49,12 @@ def write_version_in_file(
 ) -> int:
     """Replace `old_version` with `new_version` ONLY where the anchor matches.
 
+    Comparison is done after normalizing SNAPSHOT separators (so `1.2.3+SNAPSHOT`
+    matches `1.2.3-SNAPSHOT` for the purposes of finding the right occurrence).
+    The replacement preserves the file's original SNAPSHOT separator: if the
+    file used '+SNAPSHOT' and the new version is a SNAPSHOT, it becomes
+    '+SNAPSHOT' again.
+
     Returns the number of replacements made (0 if old_version not found —
     caller should treat 0 as idempotent no-op when new_version already in place).
     """
@@ -55,14 +62,23 @@ def write_version_in_file(
     pattern = re.compile(anchor_pattern, re.MULTILINE | re.DOTALL)
     count = 0
 
+    old_norm = normalize_snapshot(old_version)
+
     def _replace(match: re.Match[str]) -> str:
         nonlocal count
         full = match.group(0)
-        v = match.group("v")
-        if v.strip() != old_version:
+        v_orig = match.group("v").strip()
+        if normalize_snapshot(v_orig) != old_norm:
             return full  # leave alone — not the version we're updating
         count += 1
-        return full.replace(old_version, new_version)
+        # Preserve the SNAPSHOT separator of the original value when writing.
+        if "+SNAPSHOT" in v_orig and "-SNAPSHOT" in new_version:
+            new_v_with_sep = new_version.replace("-SNAPSHOT", "+SNAPSHOT")
+        elif "-SNAPSHOT" in v_orig and "+SNAPSHOT" in new_version:
+            new_v_with_sep = new_version.replace("+SNAPSHOT", "-SNAPSHOT")
+        else:
+            new_v_with_sep = new_version
+        return full.replace(v_orig, new_v_with_sep)
 
     new_content = pattern.sub(_replace, content)
     if count > 0:
@@ -152,9 +168,18 @@ def read_all_versions(
 def verify_versions_consistent(
     primary: FileSpec, secondaries: list[FileSpec]
 ) -> None:
-    """Raise VersionMismatchError if any secondary disagrees with primary."""
+    """Raise VersionMismatchError if any secondary disagrees with primary.
+
+    Comparison normalizes SNAPSHOT separators ('+SNAPSHOT' is treated as
+    equivalent to '-SNAPSHOT') so that mixed-convention files (e.g. pom.xml
+    using '-' and pipeline.yaml using '+') don't raise spurious mismatches.
+    """
     primary_v, secondary_matches = read_all_versions(primary, secondaries)
-    bad = [m for m in secondary_matches if m.matched_version != primary_v]
+    primary_norm = normalize_snapshot(primary_v)
+    bad = [
+        m for m in secondary_matches
+        if normalize_snapshot(m.matched_version) != primary_norm
+    ]
     if bad:
         details = "\n".join(
             f"  {m.file}:{m.line}  {m.matched_version}" for m in bad

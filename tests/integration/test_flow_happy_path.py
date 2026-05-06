@@ -112,9 +112,10 @@ class TestFlowHappyPath:
             # Phase FROZEN_LOCAL
             "yes",                            # confirm push
             # Phase FROZEN_PUSHED (MR creation)
+            "yes",                            # confirm MR creation upfront
             "Release 1.0.0",                  # MR title
-            "yes",                            # confirm MR
             # Phase BUMP_PENDING
+            "yes",                            # confirm bump upfront
             "1.0.1-SNAPSHOT",                 # next version
             "version bump 1.0.1-SNAPSHOT",    # commit message
             # Phase BUMPED_LOCAL

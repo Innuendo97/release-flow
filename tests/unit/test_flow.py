@@ -84,3 +84,59 @@ class TestBranchPolicy:
         r = evaluate_branch_policy(s, feature_has_unmerged_commits=True)
         assert r.action == "stop"
         assert "merge" in r.reason.lower()
+
+
+class TestFindOrphanReleaseBranch:
+    """Detect release branches that exist on origin but have no open MR
+    (typical case: user previously declined to create the MR, now wants
+    to create it without starting a new release)."""
+
+    def _fake_git(self, remote_branches):
+        from unittest.mock import MagicMock
+        git = MagicMock()
+        git.remote_branches.return_value = remote_branches
+        return git
+
+    def test_returns_none_when_no_release_branches(self):
+        from release_flow.flow import _find_orphan_release_branch
+        git = self._fake_git(["origin/develop", "origin/master"])
+        assert _find_orphan_release_branch(git, [], "release/release-") is None
+
+    def test_returns_none_when_release_has_open_mr(self):
+        from release_flow.flow import _find_orphan_release_branch
+        from release_flow.gitlab_client import MergeRequest
+
+        git = self._fake_git([
+            "origin/develop", "origin/master",
+            "origin/release/release-1.0.0",
+        ])
+        mrs = [
+            MergeRequest(
+                iid=1, title="x", source_branch="release/release-1.0.0",
+                target_branch="master", state="opened",
+                web_url="https://x", author_username="me",
+            ),
+        ]
+        assert _find_orphan_release_branch(git, mrs, "release/release-") is None
+
+    def test_returns_orphan_branch(self):
+        from release_flow.flow import _find_orphan_release_branch
+        git = self._fake_git([
+            "origin/develop", "origin/master",
+            "origin/release/release-1.1.14",
+        ])
+        # No MRs at all → branch is orphan
+        result = _find_orphan_release_branch(git, [], "release/release-")
+        assert result == "release/release-1.1.14"
+
+    def test_returns_most_recent_when_multiple_orphans(self):
+        from release_flow.flow import _find_orphan_release_branch
+        git = self._fake_git([
+            "origin/develop", "origin/master",
+            "origin/release/release-1.0.0",
+            "origin/release/release-1.1.14",
+            "origin/release/release-1.0.5",
+        ])
+        result = _find_orphan_release_branch(git, [], "release/release-")
+        # Lexicographic sort puts 1.1.14 last
+        assert result == "release/release-1.1.14"

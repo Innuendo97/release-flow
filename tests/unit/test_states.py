@@ -176,3 +176,87 @@ class TestDetectPhase:
             develop_ahead_of_origin=False,
         )
         assert detect_phase(s) == Phase.DONE
+
+    def test_frozen_local_after_master_merge(self):
+        """Real-world scenario: user did `git pull origin master` after the
+        freeze commit, creating a merge commit on top. Phase should still be
+        FROZEN_LOCAL because the version is non-SNAPSHOT (= frozen)."""
+        s = _snapshot(
+            current_branch="release/release-1.1.16",
+            release_branch_name="release/release-1.1.16",
+            primary_version="1.1.16",  # non-SNAPSHOT = frozen
+            working_tree_clean=True,
+            local_branches=["develop", "master", "release/release-1.1.16"],
+            remote_branches=["origin/develop", "origin/master"],  # NOT pushed
+            last_commit_message="Merge branch 'master' into release/release-1.1.16",
+        )
+        assert detect_phase(s) == Phase.FROZEN_LOCAL
+
+    def test_release_branch_clean_but_snapshot_still_present(self):
+        """Edge case: release branch created but freeze step not done yet.
+        Working tree clean, but version is still SNAPSHOT → RELEASE_BRANCH_CREATED."""
+        s = _snapshot(
+            current_branch="release/release-1.1.16",
+            release_branch_name="release/release-1.1.16",
+            primary_version="1.1.16-SNAPSHOT",  # still SNAPSHOT
+            working_tree_clean=True,
+            local_branches=["develop", "master", "release/release-1.1.16"],
+            remote_branches=["origin/develop", "origin/master"],
+            last_commit_message="some random commit",
+        )
+        assert detect_phase(s) == Phase.RELEASE_BRANCH_CREATED
+
+    def test_recovery_then_release_needs_merge_back(self):
+        """Real scenario: Caso A recovery bumped develop to 1.1.17-SNAPSHOT
+        BEFORE the release of 1.1.16 was cut. After MR creation, we're on
+        develop with version already-bumped. Need to detect BUMPED_LOCAL
+        (not BUMP_PENDING) so merge-back is the next action."""
+        s = _snapshot(
+            current_branch="develop",
+            primary_version="1.1.17-SNAPSHOT",  # bumped during recovery
+            working_tree_clean=True,
+            last_commit_message="version bump 1.1.17-SNAPSHOT",
+            local_branches=["develop", "master", "release/release-1.1.16"],
+            remote_branches=[
+                "origin/develop", "origin/master",
+                "origin/release/release-1.1.16",
+            ],
+            open_mrs_for_release_branch=[
+                MergeRequest(
+                    iid=300, title="Release 1.1.16",
+                    source_branch="release/release-1.1.16",
+                    target_branch="master", state="opened",
+                    web_url="https://x", author_username="me",
+                ),
+            ],
+            develop_ahead_of_origin=False,  # already pushed during recovery
+            release_branches_pending_merge_back=["release/release-1.1.16"],
+            bump_already_done=True,  # 1.1.17 > 1.1.16
+        )
+        assert detect_phase(s) == Phase.BUMPED_LOCAL
+
+    def test_recovery_then_release_after_merge_back_done(self):
+        """Same scenario as above but merge-back already done. Should be DONE."""
+        s = _snapshot(
+            current_branch="develop",
+            primary_version="1.1.17-SNAPSHOT",
+            working_tree_clean=True,
+            last_commit_message="Merge release 1.1.16 into develop",
+            local_branches=["develop", "master", "release/release-1.1.16"],
+            remote_branches=[
+                "origin/develop", "origin/master",
+                "origin/release/release-1.1.16",
+            ],
+            open_mrs_for_release_branch=[
+                MergeRequest(
+                    iid=300, title="Release 1.1.16",
+                    source_branch="release/release-1.1.16",
+                    target_branch="master", state="opened",
+                    web_url="https://x", author_username="me",
+                ),
+            ],
+            develop_ahead_of_origin=False,
+            release_branches_pending_merge_back=[],  # merge-back done
+            bump_already_done=True,
+        )
+        assert detect_phase(s) == Phase.DONE

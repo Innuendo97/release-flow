@@ -125,6 +125,45 @@ class GitRepo:
     def pull_ff_only(self, remote: str, branch: str) -> None:
         self._run(["pull", "--ff-only", remote, branch])
 
+    def pull_with_merge(self, remote: str, branch: str) -> None:
+        """Pull allowing a merge commit if branches have diverged.
+
+        Uses --no-edit to avoid opening an editor for the merge message.
+        Raises GitError if there are unresolvable conflicts (left in working tree).
+        """
+        self._run(["pull", "--no-edit", "--no-rebase", remote, branch])
+
+    def is_ancestor(self, ancestor_ref: str, descendant_ref: str) -> bool:
+        """True iff `ancestor_ref` is an ancestor commit of `descendant_ref`.
+
+        Uses `git merge-base --is-ancestor`: exit 0 means yes, exit 1 means no.
+        """
+        res = self._run(
+            ["merge-base", "--is-ancestor", ancestor_ref, descendant_ref],
+            check=False,
+        )
+        return res.returncode == 0
+
+    def last_meaningful_commit_message(
+        self, ref: str = "HEAD", lookback: int = 30
+    ) -> str:
+        """Return the most recent commit subject on `ref` that isn't a
+        'version freeze', 'version bump', or a merge commit.
+
+        Useful for auto-populating the MR description with the actual
+        user-facing change that triggered the release. Returns an empty
+        string if no meaningful commit is found within `lookback` commits.
+        """
+        skip_prefixes = ("version freeze", "version bump", "Merge ")
+        out = self._run(
+            ["log", "--pretty=%s", f"-n{lookback}", ref], check=False
+        ).stdout
+        for line in out.splitlines():
+            line = line.strip()
+            if line and not line.startswith(skip_prefixes):
+                return line
+        return ""
+
     def delete_local_branch(self, name: str) -> None:
         _refuse_if_protected(name, "delete_local_branch")
         self._run(["branch", "-D", name])

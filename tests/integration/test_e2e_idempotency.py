@@ -116,8 +116,8 @@ class TestIdempotency:
             "1.0.0", "release/release-1.0.0",          # CLEAN
             "version freeze 1.0.0",                     # RELEASE_BRANCH_CREATED
             "yes",                                      # FROZEN_LOCAL push
-            "Release 1.0.0", "yes",                     # FROZEN_PUSHED MR
-            "1.0.1-SNAPSHOT", "version bump 1.0.1-SNAPSHOT",  # BUMP_PENDING
+            "yes", "Release 1.0.0",                     # FROZEN_PUSHED: confirm MR upfront, then title
+            "yes", "1.0.1-SNAPSHOT", "version bump 1.0.1-SNAPSHOT",  # BUMP_PENDING: confirm + version + msg
             "yes", "yes",                               # BUMPED_LOCAL --ours, push
         ])
         sp1.queue_edit("body")

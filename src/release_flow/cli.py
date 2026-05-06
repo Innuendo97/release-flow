@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from release_flow import __version__
+from release_flow.exceptions import UserAbortError
 
 if TYPE_CHECKING:
     from release_flow.prompts import QuestionaryPrompter
@@ -67,6 +68,10 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("\nAborted.", file=sys.stderr)
         return 130
+    except UserAbortError as e:
+        # Friendly message instead of traceback when user declines a confirmation.
+        print(f"\nAnnullato: {e}", file=sys.stderr)
+        return 1
 
 
 def _cmd_main(args: argparse.Namespace) -> int:
@@ -98,9 +103,8 @@ def _cmd_main(args: argparse.Namespace) -> int:
             audit_logger=logger,
         )
         logger.log_event(level="info", phase=result.final_phase.value, action="finish")
-        print(f"\n--- {result.final_phase.value} ---")
-        if result.created_mr:
-            print(f"MR creata: {result.created_mr.web_url}")
+        # The DONE summary is printed by flow.run() itself when DONE is reached;
+        # nothing more to print here.
         return 0
     finally:
         logger.purge_old()
@@ -299,19 +303,68 @@ def _cmd_abort(args: argparse.Namespace) -> int:
 
 
 def _cmd_config_edit(args: argparse.Namespace) -> int:
-    """Open config file in editor."""
+    """Open config file in editor.
+
+    Resolution order:
+      1. If $EDITOR is set, use it (split into args via shlex so things like
+         "code --wait" work).
+      2. On Windows, fall back to os.startfile (= open with default associated app).
+      3. On Unix, fall back to 'nano', 'vim', 'vi' in that order.
+
+    Always prints the absolute path so the user can open it manually if all
+    automatic attempts fail.
+    """
     import os
+    import shlex
     import subprocess
 
     from release_flow.config import default_config_path
 
     cfg_path = args.config or default_config_path()
     if not cfg_path.exists():
-        print(f"Config non esiste in {cfg_path}. Lancia 'release-flow init'.")
+        print(f"Config non esiste in: {cfg_path}")
+        print("Lancia 'release-flow init' per crearla.")
         return 1
-    editor = os.environ.get("EDITOR", "notepad" if os.name == "nt" else "vi")
-    subprocess.run([editor, str(cfg_path)])
-    return 0
+
+    abs_path = str(cfg_path.resolve())
+    print(f"Config: {abs_path}")
+
+    editor_env = os.environ.get("EDITOR", "").strip()
+    if editor_env:
+        try:
+            editor_args = shlex.split(editor_env, posix=(os.name != "nt"))
+            subprocess.run([*editor_args, abs_path], check=True)
+            return 0
+        except (FileNotFoundError, subprocess.CalledProcessError, OSError) as e:
+            print(f"⚠ Editor da $EDITOR ({editor_env!r}) non utilizzabile: {e}")
+            print("Provo il fallback di sistema...")
+
+    if os.name == "nt":
+        try:
+            os.startfile(abs_path)
+            return 0
+        except OSError as e:
+            print(f"⚠ os.startfile fallito: {e}")
+            try:
+                subprocess.run(["notepad", abs_path], check=True)
+                return 0
+            except (FileNotFoundError, subprocess.CalledProcessError, OSError) as e2:
+                print(f"⚠ notepad fallito: {e2}")
+                print(f"\nApri manualmente: {abs_path}")
+                return 1
+
+    for default_editor in ("nano", "vim", "vi"):
+        try:
+            subprocess.run([default_editor, abs_path], check=True)
+            return 0
+        except FileNotFoundError:
+            continue
+        except subprocess.CalledProcessError as e:
+            print(f"⚠ {default_editor} ha restituito errore: {e}")
+            break
+
+    print(f"\nNessun editor disponibile. Apri manualmente: {abs_path}")
+    return 1
 
 
 def _cmd_logs(args: argparse.Namespace) -> int:
@@ -351,20 +404,18 @@ default_bump = "{default_bump}"
 freeze_commit_msg = "version freeze {{version}}"
 bump_commit_msg = "version bump {{next_version}}"
 merge_back_commit_msg = "Merge release {{version}} into develop"
-mr_master_title = "Release {{version}}"
+mr_master_title = "{{repo_name}} release {{version}}"
 mr_master_body_template = """
 ## Release {{version}}
 
 ### Scope
-TODO
-
-### Rollback
-TODO
+{{last_commit_message}}
 """
 
 [behavior]
 confirm_before_push = true
 confirm_before_mr = true
+confirm_before_bump = true
 open_mr_in_browser_after_create = true
 mr_develop_strategy = "direct_push"
 

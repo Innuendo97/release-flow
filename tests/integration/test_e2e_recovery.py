@@ -1,8 +1,8 @@
 """E2E test for recovery scenarios.
 
-Note: the orchestrator (flow.run) currently raises FlowError when recovery is needed,
-delegating actual recovery handling to a future iteration. These tests verify that
-the orchestrator correctly DETECTS the recovery condition and refuses to proceed.
+The orchestrator now AUTO-HANDLES Caso A (missing SNAPSHOT bump on develop) and
+Caso B (versions misaligned). These tests verify that the recovery is applied
+end-to-end: files modified, commit made, push done.
 """
 
 from pathlib import Path
@@ -17,7 +17,6 @@ from release_flow.config import (
     LoggingConfig,
     ProjectTypeConfig,
 )
-from release_flow.exceptions import FlowError
 from release_flow.flow import run as flow_run
 from release_flow.git_repo import GitRepo
 from release_flow.gitlab_client import GitLabClient
@@ -50,7 +49,7 @@ def _make_config() -> Config:
 
 
 def _setup_java_repo_with_version(repo: Path, primary_v: str, chart_v: str | None = None, pipeline_v: str | None = None):
-    """Create java project files with explicit per-file versions (for misalignment tests)."""
+    """Create java project files with explicit per-file versions."""
     chart_v = chart_v or primary_v
     pipeline_v = pipeline_v or primary_v
     (repo / "pom.xml").write_text(
@@ -71,12 +70,9 @@ def _setup_java_repo_with_version(repo: Path, primary_v: str, chart_v: str | Non
 
 @pytest.mark.integration
 class TestRecoveryCasoA:
-    def test_develop_with_non_snapshot_raises_flowerror(
-        self, tmp_repo_with_origin, monkeypatch
-    ):
-        """Caso A: develop has non-SNAPSHOT version. Orchestrator should detect and refuse."""
+    def test_auto_recovers_missing_snapshot_bump(self, tmp_repo_with_origin, monkeypatch):
+        """Caso A: develop has 1.0.0 (no -SNAPSHOT). Auto-recover bumps to 1.0.1-SNAPSHOT."""
         repo = tmp_repo_with_origin
-        # develop has 1.0.0 (no SNAPSHOT) — anomaly
         _setup_java_repo_with_version(repo, "1.0.0", "1.0.0", "1.0.0")
         gr = GitRepo(repo)
         gr.add(["pom.xml", "chart/Chart.yaml", "pipeline.yaml"])
@@ -85,28 +81,36 @@ class TestRecoveryCasoA:
 
         cfg = _make_config()
         client = GitLabClient(base_url=cfg.gitlab.base_url, token=cfg.gitlab.token)
-        # Decouple GitLab project lookup from real URL
         monkeypatch.setattr(GitLabClient, "project_path_from_url", lambda self, url: "org/app")
-        # Stub list_open_mrs to avoid network
         monkeypatch.setattr(GitLabClient, "list_open_mrs", lambda self, *a, **kw: [])
 
-        prompter = ScriptedPrompter()  # no prompts expected — should fail at recovery detection
-        with pytest.raises(FlowError) as exc:
-            flow_run(
-                repo_root=repo, config=cfg, gitlab=client,
-                prompter=prompter, allow_dirty=False,
-            )
-        assert "recovery needed" in str(exc.value).lower() or "caso_a" in str(exc.value).lower()
+        prompter = ScriptedPrompter()
+        prompter.queue([
+            "1.0.1-SNAPSHOT",  # next-snapshot version
+            "yes",             # confirm bump
+            "no",              # decline proceeding to release
+        ])
+
+        result = flow_run(
+            repo_root=repo, config=cfg, gitlab=client,
+            prompter=prompter, allow_dirty=False,
+        )
+
+        # Verify files were updated
+        assert "1.0.1-SNAPSHOT" in (repo / "pom.xml").read_text(encoding="utf-8")
+        assert "1.0.1-SNAPSHOT" in (repo / "chart/Chart.yaml").read_text(encoding="utf-8")
+        assert "1.0.1-SNAPSHOT" in (repo / "pipeline.yaml").read_text(encoding="utf-8")
+        # And committed
+        assert "version bump 1.0.1-SNAPSHOT" in gr.last_commit_message()
+        # User declined to proceed → exits with CLEAN
+        assert result.final_phase.value == "CLEAN"
 
 
 @pytest.mark.integration
 class TestRecoveryCasoB:
-    def test_misaligned_versions_raises_flowerror(
-        self, tmp_repo_with_origin, monkeypatch
-    ):
-        """Caso B: secondary file versions disagree with primary. Orchestrator should refuse."""
+    def test_auto_recovers_misaligned_versions(self, tmp_repo_with_origin, monkeypatch):
+        """Caso B: pom 1.0.0-SNAPSHOT, Chart 0.9.0-SNAPSHOT. Auto-align to chosen version."""
         repo = tmp_repo_with_origin
-        # MISALIGNED: pom 1.0.0-SNAPSHOT, Chart 0.9.0-SNAPSHOT
         _setup_java_repo_with_version(repo, "1.0.0-SNAPSHOT", "0.9.0-SNAPSHOT", "1.0.0-SNAPSHOT")
         gr = GitRepo(repo)
         gr.add(["pom.xml", "chart/Chart.yaml", "pipeline.yaml"])
@@ -119,11 +123,22 @@ class TestRecoveryCasoB:
         monkeypatch.setattr(GitLabClient, "list_open_mrs", lambda self, *a, **kw: [])
 
         prompter = ScriptedPrompter()
-        with pytest.raises(FlowError) as exc:
-            flow_run(
-                repo_root=repo, config=cfg, gitlab=client,
-                prompter=prompter, allow_dirty=False,
-            )
-        # Either "recovery needed" (caso B) OR "version mismatch" (preflight) — both acceptable
-        msg = str(exc.value).lower()
-        assert "recovery" in msg or "version" in msg or "caso_b" in msg
+        prompter.queue([
+            "1.0.0-SNAPSHOT",  # choose pom version as authoritative
+            "yes",             # confirm align
+            "no",              # decline proceeding to release
+        ])
+
+        result = flow_run(
+            repo_root=repo, config=cfg, gitlab=client,
+            prompter=prompter, allow_dirty=False,
+        )
+
+        # Verify Chart.yaml was bumped to align with pom
+        chart_content = (repo / "chart/Chart.yaml").read_text(encoding="utf-8")
+        assert "1.0.0-SNAPSHOT" in chart_content
+        assert "0.9.0-SNAPSHOT" not in chart_content
+        # And committed
+        assert "align versions" in gr.last_commit_message().lower()
+        # User declined to proceed → exits with CLEAN
+        assert result.final_phase.value == "CLEAN"

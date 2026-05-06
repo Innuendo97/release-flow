@@ -89,3 +89,40 @@ class TestGitRepoWriteOps:
         gr.checkout("develop")
         gr.delete_local_branch("release/release-1.0.0")
         assert "release/release-1.0.0" not in gr.local_branches()
+
+
+@pytest.mark.integration
+class TestLastMeaningfulCommitMessage:
+    def test_skips_version_freeze_and_bump(self, tmp_git_repo):
+        gr = GitRepo(tmp_git_repo)
+        (tmp_git_repo / "feature.txt").write_text("change", encoding="utf-8")
+        gr.add(["feature.txt"])
+        gr.commit("fix: real user change")
+        (tmp_git_repo / "x.txt").write_text("v", encoding="utf-8")
+        gr.add(["x.txt"])
+        gr.commit("version bump 1.2.0-SNAPSHOT")
+        (tmp_git_repo / "y.txt").write_text("v", encoding="utf-8")
+        gr.add(["y.txt"])
+        gr.commit("version freeze 1.2.0")
+        # Should skip the two version-* commits and return the real one
+        assert gr.last_meaningful_commit_message() == "fix: real user change"
+
+    def test_skips_merge_commits(self, tmp_repo_with_origin):
+        gr = GitRepo(tmp_repo_with_origin)
+        (tmp_repo_with_origin / "feat.txt").write_text("x", encoding="utf-8")
+        gr.add(["feat.txt"])
+        gr.commit("feat: new endpoint")
+        gr.create_branch("side")
+        (tmp_repo_with_origin / "side.txt").write_text("s", encoding="utf-8")
+        gr.add(["side.txt"])
+        gr.commit("side: change on side branch")
+        gr.checkout("develop")
+        gr._run(["merge", "--no-ff", "side", "-m", "Merge branch 'side' into develop"])
+        # The most recent commit is the merge — should be skipped
+        msg = gr.last_meaningful_commit_message()
+        assert msg == "side: change on side branch"
+
+    def test_returns_initial_when_only_init_commit(self, tmp_git_repo):
+        gr = GitRepo(tmp_git_repo)
+        # Only the initial commit — should be returned (not version-*, not Merge)
+        assert gr.last_meaningful_commit_message() == "initial"

@@ -181,7 +181,7 @@ class TestExecutePhaseFrozenPushed:
         )
         client = GitLabClient(base_url="https://gitlab.example", token="glpat-x")
         prompter = ScriptedPrompter()
-        prompter.queue(["Release 1.0.0", "yes"])  # title default, confirm
+        prompter.queue(["yes", "Release 1.0.0"])  # confirm upfront, then title
         prompter.queue_edit("## Release notes\nbody here\n")
 
         mr = execute_phase_frozen_pushed(
@@ -196,6 +196,68 @@ class TestExecutePhaseFrozenPushed:
             confirm_before_mr=True,
         )
         assert mr.iid == 142
+
+    @responses.activate
+    def test_creates_mr_with_repo_name_and_commit_message_in_template(
+        self, tmp_repo_with_origin
+    ):
+        """Templates can reference {repo_name} and {last_commit_message}."""
+        responses.get(
+            "https://gitlab.example/api/v4/projects/org%2Frepo",
+            json={"id": 1, "path": "repo"}, status=200,
+        )
+        responses.get(
+            "https://gitlab.example/api/v4/projects/1/merge_requests",
+            json=[], status=200,
+        )
+        # Capture the request body to verify the title/body got the new vars
+        captured = {}
+
+        def _capture(request):
+            import json as _json
+            captured.update(_json.loads(request.body))
+            return (
+                201,
+                {},
+                _json.dumps({
+                    "iid": 200,
+                    "title": "service-rds-app release 1.0.0",
+                    "source_branch": "release/release-1.0.0",
+                    "target_branch": "master",
+                    "state": "opened",
+                    "web_url": "https://gitlab.example/.../200",
+                    "author": {"username": "me"},
+                }),
+            )
+
+        responses.add_callback(
+            responses.POST,
+            "https://gitlab.example/api/v4/projects/1/merge_requests",
+            callback=_capture,
+            content_type="application/json",
+        )
+        client = GitLabClient(base_url="https://gitlab.example", token="glpat-x")
+        prompter = ScriptedPrompter()
+        prompter.queue(["yes", "service-rds-app release 1.0.0"])  # confirm upfront, then title
+        prompter.queue_edit("## Release 1.0.0\n\n### Scope\nfix: bug X\n")
+
+        mr = execute_phase_frozen_pushed(
+            gitlab=client,
+            project_path="org/repo",
+            release_branch="release/release-1.0.0",
+            master_branch="master",
+            release_version="1.0.0",
+            prompter=prompter,
+            mr_title_template="{repo_name} release {version}",
+            mr_body_template="## Release {version}\n\n### Scope\n{last_commit_message}\n",
+            confirm_before_mr=True,
+            repo_name="service-rds-app",
+            last_commit_message="fix: bug X",
+        )
+        assert mr.iid == 200
+        assert captured["title"] == "service-rds-app release 1.0.0"
+        # Body went through edit_text — that returned the queued edit text.
+        # The initial body (before edit) had the templated content.
 
 
 @pytest.mark.integration
@@ -223,6 +285,7 @@ class TestExecutePhaseBumpPending:
         ]
         prompter = ScriptedPrompter()
         prompter.queue([
+            "yes",                             # confirm bump upfront
             "1.0.1-SNAPSHOT",                  # next version
             "version bump 1.0.1-SNAPSHOT",     # commit message
         ])

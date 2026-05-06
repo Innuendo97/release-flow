@@ -7,6 +7,7 @@ from release_flow.version_bump import (
     BumpType,
     bump_version,
     is_snapshot,
+    normalize_snapshot,
     parse_version,
     strip_snapshot,
     to_snapshot,
@@ -98,3 +99,50 @@ class TestPropertyBased:
     def test_strip_then_to_snapshot_idempotent(self, major, minor, patch):
         v = f"{major}.{minor}.{patch}"
         assert to_snapshot(strip_snapshot(to_snapshot(v))) == f"{v}-SNAPSHOT"
+
+
+class TestPlusSnapshotConvention:
+    """Some files (e.g. pipeline.yaml in certain teams) use '+SNAPSHOT'
+    instead of the Maven-standard '-SNAPSHOT'. The two forms must be
+    treated as equivalent for comparison, but writes preserve the original.
+    """
+
+    def test_is_snapshot_plus_form(self):
+        assert is_snapshot("1.2.3+SNAPSHOT") is True
+
+    def test_is_snapshot_minus_form(self):
+        assert is_snapshot("1.2.3-SNAPSHOT") is True
+
+    def test_strip_snapshot_handles_plus(self):
+        assert strip_snapshot("1.2.3+SNAPSHOT") == "1.2.3"
+
+    def test_strip_snapshot_handles_minus(self):
+        assert strip_snapshot("1.2.3-SNAPSHOT") == "1.2.3"
+
+    def test_normalize_snapshot_converts_plus_to_minus(self):
+        assert normalize_snapshot("1.2.3+SNAPSHOT") == "1.2.3-SNAPSHOT"
+
+    def test_normalize_snapshot_idempotent_for_minus(self):
+        assert normalize_snapshot("1.2.3-SNAPSHOT") == "1.2.3-SNAPSHOT"
+
+    def test_normalize_snapshot_passthrough_for_non_snapshot(self):
+        assert normalize_snapshot("1.2.3") == "1.2.3"
+
+    def test_to_snapshot_default_is_minus(self):
+        assert to_snapshot("1.2.3") == "1.2.3-SNAPSHOT"
+
+    def test_to_snapshot_with_plus(self):
+        assert to_snapshot("1.2.3", separator="+") == "1.2.3+SNAPSHOT"
+
+    def test_to_snapshot_invalid_separator_raises(self):
+        with pytest.raises(ValueError):
+            to_snapshot("1.2.3", separator="*")
+
+    def test_parse_version_plus_form(self):
+        assert parse_version("1.2.3+SNAPSHOT") == (1, 2, 3, "SNAPSHOT")
+
+    def test_bump_version_strips_only_numeric_part(self):
+        # bump operates on numeric components; suffix retained as-is
+        assert bump_version("1.2.3+SNAPSHOT", BumpType.PATCH) == "1.2.4-SNAPSHOT"
+        # ^ bump_version always reconstructs with '-' separator (it's only
+        # called on develop's primary version, which is always Maven-style).

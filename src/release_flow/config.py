@@ -35,6 +35,7 @@ class DefaultsConfig:
 class BehaviorConfig:
     confirm_before_push: bool = True
     confirm_before_mr: bool = True
+    confirm_before_bump: bool = True
     open_mr_in_browser_after_create: bool = True
     editor: str = ""
     mr_develop_strategy: str = "direct_push"

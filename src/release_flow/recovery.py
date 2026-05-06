@@ -1,17 +1,34 @@
 """Recovery sub-flows for dirty/anomalous repo states (cases A-F).
 
-Each recovery function returns a `RecoveryPlan` describing what to do.
-The orchestrator (flow.py) is responsible for applying the plan via GitRepo.
-This separation keeps recovery testable without git I/O.
+Each `recover_caso_*` function returns a plan (RecoveryPlan / AlignmentChoice / str)
+describing what to do. The corresponding `apply_caso_*` function executes it via
+GitRepo, with verbose step-by-step output.
+
+This separation keeps the decision logic testable without git I/O, while the apply
+functions encapsulate the side effects.
 """
 
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 
 from release_flow.exceptions import RecoveryError, UserAbortError
+from release_flow.git_repo import GitRepo
 from release_flow.prompts import Prompter
 from release_flow.states import RepoSnapshot
-from release_flow.version_bump import BumpType, bump_version, is_snapshot, to_snapshot
+from release_flow.version_bump import (
+    BumpType,
+    bump_version,
+    is_snapshot,
+    normalize_snapshot,
+    to_snapshot,
+)
+from release_flow.version_io import (
+    FileSpec,
+    read_all_versions,
+    replace_version_in_files,
+    write_version_in_file,
+)
 
 
 class RecoveryAction(StrEnum):
@@ -147,3 +164,108 @@ def recover_caso_f() -> None:
         "repo is in the middle of an unresolved merge. "
         "Resolve or abort the merge yourself ('git merge --abort'), then rerun."
     )
+
+
+# ---------------------------------------------------------------------------
+# Apply functions: execute a recovery plan against a real GitRepo, with
+# verbose step-by-step output to stdout.
+# ---------------------------------------------------------------------------
+
+
+def apply_caso_a_plan(
+    git: GitRepo,
+    primary: FileSpec,
+    secondaries: list[FileSpec],
+    plan: RecoveryPlan,
+    develop_branch: str = "develop",
+) -> None:
+    """Apply a Caso A recovery plan: bump version files, commit, optionally push."""
+    print(f"  → Modifico file di versione: {plan.from_version} → {plan.to_version}")
+    n = replace_version_in_files(primary, secondaries, plan.from_version, plan.to_version)
+    print(f"    {n} occorrenze sostituite")
+
+    files = [str(primary.path.relative_to(git.root)).replace("\\", "/")]
+    files.extend(
+        str(s.path.relative_to(git.root)).replace("\\", "/") for s in secondaries
+    )
+    print(f"  → git add {' '.join(files)}")
+    git.add(files)
+
+    print(f'  → git commit -m "{plan.commit_message}"')
+    git.commit(plan.commit_message)
+
+    if plan.push:
+        print(f"  → git push origin {develop_branch}")
+        git.push("origin", develop_branch)
+
+    print("  ✓ Recovery Caso A completato")
+
+
+def apply_caso_b_alignment(
+    git: GitRepo,
+    primary: FileSpec,
+    secondaries: list[FileSpec],
+    choice: AlignmentChoice,
+    develop_branch: str = "develop",
+) -> None:
+    """Apply a Caso B recovery: align all files to the authoritative version.
+
+    Comparison is normalized: a `+SNAPSHOT` value is considered equal to its
+    `-SNAPSHOT` counterpart, so files using different SNAPSHOT separators
+    won't be flagged as divergent on that basis alone.
+    """
+    target = choice.authoritative_version
+    target_norm = normalize_snapshot(target)
+    print(f"  → Allineo tutti i file alla versione {target!r}")
+
+    primary_v, secondary_matches = read_all_versions(primary, secondaries)
+
+    files_changed: set[Path] = set()
+
+    if normalize_snapshot(primary_v) != target_norm:
+        for pattern in primary.patterns:
+            n = write_version_in_file(primary.path, primary_v, target, pattern)
+            if n > 0:
+                print(f"    {primary.path.name}: {primary_v} → {target}")
+                files_changed.add(primary.path)
+
+    divergent_versions = {
+        m.matched_version for m in secondary_matches
+        if normalize_snapshot(m.matched_version) != target_norm
+    }
+    for old_v in divergent_versions:
+        for spec in secondaries:
+            for pattern in spec.patterns:
+                n = write_version_in_file(spec.path, old_v, target, pattern)
+                if n > 0:
+                    print(f"    {spec.path.name}: {old_v} → {target}")
+                    files_changed.add(spec.path)
+
+    if not files_changed:
+        print("    Nulla da fare (già allineato).")
+        return
+
+    files = sorted(
+        str(p.relative_to(git.root)).replace("\\", "/") for p in files_changed
+    )
+    print(f"  → git add {' '.join(files)}")
+    git.add(files)
+
+    msg = f"fix: align versions to {target}"
+    print(f'  → git commit -m "{msg}"')
+    git.commit(msg)
+
+    print(f"  → git push origin {develop_branch}")
+    git.push("origin", develop_branch)
+
+    print("  ✓ Recovery Caso B completato")
+
+
+def apply_caso_e_pull(
+    git: GitRepo,
+    develop_branch: str = "develop",
+) -> None:
+    """Apply a Caso E recovery: fast-forward pull develop from origin."""
+    print(f"  → git pull --ff-only origin {develop_branch}")
+    git.pull_ff_only("origin", develop_branch)
+    print("  ✓ Recovery Caso E completato")
