@@ -339,10 +339,10 @@ def _cmd_config_edit(args: argparse.Namespace) -> int:
             print(f"⚠ Editor da $EDITOR ({editor_env!r}) non utilizzabile: {e}")
             print("Provo il fallback di sistema...")
 
-    if os.name == "nt":
+    if sys.platform == "win32":
+        # mypy narrows the type here: os.startfile is defined only on win32.
         try:
-            # getattr keeps mypy happy on non-Windows (where os.startfile is undefined)
-            getattr(os, "startfile")(abs_path)
+            os.startfile(abs_path)
             return 0
         except OSError as e:
             print(f"⚠ os.startfile fallito: {e}")

@@ -11,6 +11,7 @@ from release_flow.cli import _cmd_status
 class TestStatusCommand:
     def test_runs_without_error_in_java_repo(self, tmp_repo_with_origin, monkeypatch, capsys, tmp_path):
         from release_flow.git_repo import GitRepo
+
         from .test_flow_phases import _setup_java_repo
 
         _setup_java_repo(tmp_repo_with_origin)
