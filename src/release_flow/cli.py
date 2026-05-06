@@ -341,7 +341,8 @@ def _cmd_config_edit(args: argparse.Namespace) -> int:
 
     if os.name == "nt":
         try:
-            os.startfile(abs_path)
+            # getattr keeps mypy happy on non-Windows (where os.startfile is undefined)
+            getattr(os, "startfile")(abs_path)
             return 0
         except OSError as e:
             print(f"⚠ os.startfile fallito: {e}")

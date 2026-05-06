@@ -44,7 +44,7 @@ class TestIdempotency:
     def test_rerun_after_done_is_noop(self, tmp_repo_with_origin, monkeypatch, tmp_path):
         from release_flow.gitlab_client import GitLabClient
         from release_flow.prompts import ScriptedPrompter
-        from tests.integration.test_flow_phases import _setup_java_repo
+        from .test_flow_phases import _setup_java_repo
 
         _mr_item = {
             "iid": 200,

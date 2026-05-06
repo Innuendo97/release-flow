@@ -95,7 +95,7 @@ class TestFlowHappyPath:
 
         repo = tmp_repo_with_origin
         # Set up java project on develop
-        from tests.integration.test_flow_phases import _setup_java_repo
+        from .test_flow_phases import _setup_java_repo
         _setup_java_repo(repo)
 
         cfg = _make_config()

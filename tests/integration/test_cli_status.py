@@ -11,7 +11,7 @@ from release_flow.cli import _cmd_status
 class TestStatusCommand:
     def test_runs_without_error_in_java_repo(self, tmp_repo_with_origin, monkeypatch, capsys, tmp_path):
         from release_flow.git_repo import GitRepo
-        from tests.integration.test_flow_phases import _setup_java_repo
+        from .test_flow_phases import _setup_java_repo
 
         _setup_java_repo(tmp_repo_with_origin)
         # Repoint origin to a parseable GitLab URL (test won't make network call to real GitLab; LIST_OPEN_MRS will fail with auth error which the impl should handle)

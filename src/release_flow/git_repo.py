@@ -155,8 +155,11 @@ class GitRepo:
         string if no meaningful commit is found within `lookback` commits.
         """
         skip_prefixes = ("version freeze", "version bump", "Merge ")
+        # --first-parent walks the develop line only (deterministic across
+        # platforms when timestamps collide; semantically: we want the last
+        # commit on the integration branch, not from a merged side branch).
         out = self._run(
-            ["log", "--pretty=%s", f"-n{lookback}", ref], check=False
+            ["log", "--first-parent", "--pretty=%s", f"-n{lookback}", ref], check=False
         ).stdout
         for line in out.splitlines():
             line = line.strip()

@@ -118,9 +118,11 @@ class TestLastMeaningfulCommitMessage:
         gr.commit("side: change on side branch")
         gr.checkout("develop")
         gr._run(["merge", "--no-ff", "side", "-m", "Merge branch 'side' into develop"])
-        # The most recent commit is the merge — should be skipped
+        # The most recent commit is the merge — should be skipped, and we
+        # walk first-parent (the develop line), so we expect the previous
+        # develop commit, not the side-branch one.
         msg = gr.last_meaningful_commit_message()
-        assert msg == "side: change on side branch"
+        assert msg == "feat: new endpoint"
 
     def test_returns_initial_when_only_init_commit(self, tmp_git_repo):
         gr = GitRepo(tmp_git_repo)
